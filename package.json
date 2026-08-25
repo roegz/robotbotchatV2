@@ -1,0 +1,20 @@
+{
+  "name": "robotbotchatv2",
+  "version": "1.0.0",
+  "description": "Messagerie en temps reel avec appels video, comptes persistants et systeme d'amis.",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.5",
+    "uuid": "^9.0.1"
+  }
+}
