@@ -247,9 +247,9 @@ io.on('connection', (socket) => {
   // --- Signalisation WebRTC (appel audio/video) ---
   // Le serveur ne fait que relayer les messages entre les deux amis, tout le
   // traitement audio/video se fait directement entre les deux navigateurs.
-  socket.on('call:invite', ({ to } = {}) => {
+  socket.on('call:invite', ({ to, video } = {}) => {
     if (!to || !db.areFriends(uid, to)) return;
-    io.to(to).emit('call:incoming', { fromId: uid, fromPseudo: socket.pseudo });
+    io.to(to).emit('call:incoming', { fromId: uid, fromPseudo: socket.pseudo, video: !!video });
   });
   socket.on('call:accept', ({ to } = {}) => {
     if (!to) return;

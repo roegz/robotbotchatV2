@@ -23,12 +23,19 @@ const remoteVideoEl = document.getElementById('remote-video');
 const btnHangup = document.getElementById('btn-hangup');
 const btnToggleMic = document.getElementById('btn-toggle-mic');
 const btnToggleCam = document.getElementById('btn-toggle-cam');
-const btnCall = document.getElementById('btn-call');
+
+const btnCallAudio = document.getElementById('btn-call-audio');
+const btnCallVideo = document.getElementById('btn-call-video');
+const callVideoWrapEl = document.querySelector('.call-video-wrap');
+const callAudioVisualEl = document.getElementById('call-audio-visual');
+const callAudioAvatarSlot = document.getElementById('call-audio-avatar-slot');
 
 let pc = null;
 let localStream = null;
 let currentCallPeerId = null;
 let currentCallPeerPseudo = '';
+let currentCallWithVideo = true;
+let incomingCallWithVideo = true;
 let pendingCandidates = [];
 let micEnabled = true;
 let camEnabled = true;
@@ -37,11 +44,11 @@ function socket() {
   return RBC.state.socket;
 }
 
-async function getLocalStream() {
+async function getLocalStream(withVideo) {
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    return await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
   } catch (err) {
-    RBC.showToast("Impossible d'acceder a la camera/micro (verifie les autorisations du navigateur).", true);
+    RBC.showToast("Impossible d'acceder au micro" + (withVideo ? '/a la camera' : '') + " (verifie les autorisations du navigateur).", true);
     throw err;
   }
 }
@@ -80,20 +87,39 @@ function flushPendingCandidates() {
   pendingCandidates = [];
 }
 
-function openCallOverlay(peerPseudo, statusText) {
+function openCallOverlay(peerPseudo, statusText, withVideo) {
   callActiveName.textContent = peerPseudo;
   callActiveStatus.textContent = statusText;
   callActiveEl.hidden = false;
-  localVideoEl.srcObject = localStream;
   micEnabled = true;
   camEnabled = true;
   btnToggleMic.classList.remove('is-off');
   btnToggleCam.classList.remove('is-off');
+
+  if (withVideo) {
+    callVideoWrapEl.hidden = false;
+    callAudioVisualEl.hidden = true;
+    localVideoEl.srcObject = localStream;
+    btnToggleCam.hidden = false;
+  } else {
+    callVideoWrapEl.hidden = true;
+    callAudioVisualEl.hidden = false;
+    callAudioAvatarSlot.innerHTML = '';
+    const bigAvatar = document.createElement('div');
+    bigAvatar.className = 'avatar call-audio-avatar-circle';
+    bigAvatar.style.background = avatarColor(peerPseudo);
+    bigAvatar.textContent = peerPseudo.charAt(0).toUpperCase();
+    callAudioAvatarSlot.appendChild(bigAvatar);
+    btnToggleCam.hidden = true;
+  }
 }
 
 // --------------------------- lancer un appel (appelant) ---------------------------
 
-btnCall.addEventListener('click', async () => {
+btnCallAudio.addEventListener('click', () => startCall(false));
+btnCallVideo.addEventListener('click', () => startCall(true));
+
+async function startCall(withVideo) {
   const friendId = RBC.state.activeFriendId;
   if (!friendId) return;
   if (currentCallPeerId) {
@@ -108,16 +134,17 @@ btnCall.addEventListener('click', async () => {
   }
 
   try {
-    localStream = await getLocalStream();
+    localStream = await getLocalStream(withVideo);
   } catch (e) {
     return;
   }
 
   currentCallPeerId = friendId;
   currentCallPeerPseudo = friend.pseudo;
-  openCallOverlay(friend.pseudo, 'Appel en cours\u2026');
-  socket().emit('call:invite', { to: friendId });
-});
+  currentCallWithVideo = withVideo;
+  openCallOverlay(friend.pseudo, 'Appel en cours\u2026', withVideo);
+  socket().emit('call:invite', { to: friendId, video: withVideo });
+}
 
 function handleCallAccepted({ fromId }) {
   if (fromId !== currentCallPeerId) return;
@@ -143,7 +170,7 @@ function handleCallRejected({ fromId }) {
 
 // --------------------------- recevoir un appel (appele) ---------------------------
 
-function handleIncomingCall({ fromId, fromPseudo }) {
+function handleIncomingCall({ fromId, fromPseudo, video }) {
   // deja en appel ou en train d'appeler -> on decroche pas, signal "occupe"
   if (currentCallPeerId) {
     socket().emit('call:reject', { to: fromId });
@@ -151,7 +178,8 @@ function handleIncomingCall({ fromId, fromPseudo }) {
   }
   currentCallPeerId = fromId;
   currentCallPeerPseudo = fromPseudo;
-  callIncomingName.textContent = fromPseudo;
+  incomingCallWithVideo = !!video;
+  callIncomingName.textContent = fromPseudo + (video ? ' (appel video)' : ' (appel audio)');
   callIncomingEl.hidden = false;
 }
 
@@ -165,16 +193,18 @@ btnCallReject.addEventListener('click', () => {
 btnCallAccept.addEventListener('click', async () => {
   const peerId = currentCallPeerId;
   const peerPseudo = currentCallPeerPseudo;
+  const withVideo = incomingCallWithVideo;
   callIncomingEl.hidden = true;
   try {
-    localStream = await getLocalStream();
+    localStream = await getLocalStream(withVideo);
   } catch (e) {
     socket().emit('call:reject', { to: peerId });
     currentCallPeerId = null;
     return;
   }
+  currentCallWithVideo = withVideo;
   pc = createPeerConnection(peerId);
-  openCallOverlay(peerPseudo, "en attente de l'appelant\u2026");
+  openCallOverlay(peerPseudo, "en attente de l'appelant\u2026", withVideo);
   socket().emit('call:accept', { to: peerId });
 });
 
@@ -241,6 +271,9 @@ function endCall(silent) {
   callIncomingEl.hidden = true;
   localVideoEl.srcObject = null;
   remoteVideoEl.srcObject = null;
+  callVideoWrapEl.hidden = false;
+  callAudioVisualEl.hidden = true;
+  btnToggleCam.hidden = false;
   if (!silent && peerId && socket()) {
     socket().emit('call:end', { to: peerId });
   }
