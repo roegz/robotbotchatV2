@@ -12,7 +12,7 @@ const DB_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DB_DIR, 'db.json');
 
 function emptyDB() {
-  return { users: [], friendRequests: [], friendships: [], messages: [] };
+  return { users: [], friendRequests: [], friendships: [], messages: [], groups: [], groupMessages: [] };
 }
 
 let db = emptyDB();
@@ -28,6 +28,8 @@ function load() {
       db.friendRequests = db.friendRequests || [];
       db.friendships = db.friendships || [];
       db.messages = db.messages || [];
+      db.groups = db.groups || [];
+      db.groupMessages = db.groupMessages || [];
     } else {
       db = emptyDB();
       persist();
@@ -169,6 +171,75 @@ function getConversation(userA, userB, limit = 300) {
   return msgs.slice(-limit);
 }
 
+// ---------- Groupes ----------
+
+function createGroup(ownerId, name, memberIds) {
+  const uniqueMembers = Array.from(new Set([ownerId, ...memberIds]));
+  const group = { id: uuidv4(), name, ownerId, members: uniqueMembers, createdAt: Date.now() };
+  db.groups.push(group);
+  persist();
+  return group;
+}
+
+function getGroupsForUser(userId) {
+  return db.groups.filter((g) => g.members.includes(userId));
+}
+
+function getGroupById(id) {
+  return db.groups.find((g) => g.id === id) || null;
+}
+
+function isGroupMember(groupId, userId) {
+  const g = getGroupById(groupId);
+  return !!g && g.members.includes(userId);
+}
+
+function addMemberToGroup(groupId, newMemberId) {
+  const g = getGroupById(groupId);
+  if (!g) return null;
+  if (!g.members.includes(newMemberId)) {
+    g.members.push(newMemberId);
+    persist();
+  }
+  return g;
+}
+
+function groupWithPseudos(g) {
+  return {
+    id: g.id,
+    name: g.name,
+    ownerId: g.ownerId,
+    createdAt: g.createdAt,
+    members: g.members
+      .map((id) => {
+        const u = getUserById(id);
+        return u ? { id: u.id, pseudo: u.pseudo } : null;
+      })
+      .filter(Boolean),
+  };
+}
+
+function purgeOldGroupMessages() {
+  const cutoff = Date.now() - MESSAGE_TTL_MS;
+  const before = db.groupMessages.length;
+  db.groupMessages = db.groupMessages.filter((m) => m.createdAt >= cutoff);
+  if (db.groupMessages.length !== before) persist();
+}
+
+function saveGroupMessage(groupId, fromId, content) {
+  const msg = { id: uuidv4(), groupId, from: fromId, content, createdAt: Date.now() };
+  db.groupMessages.push(msg);
+  persist();
+  return msg;
+}
+
+function getGroupConversation(groupId, limit = 300) {
+  purgeOldGroupMessages();
+  const msgs = db.groupMessages.filter((m) => m.groupId === groupId);
+  msgs.sort((a, b) => a.createdAt - b.createdAt);
+  return msgs.slice(-limit);
+}
+
 module.exports = {
   getUserByPseudo,
   getUserById,
@@ -184,4 +255,13 @@ module.exports = {
   saveMessage,
   getConversation,
   purgeOldMessages,
+  createGroup,
+  getGroupsForUser,
+  getGroupById,
+  isGroupMember,
+  addMemberToGroup,
+  groupWithPseudos,
+  saveGroupMessage,
+  getGroupConversation,
+  purgeOldGroupMessages,
 };

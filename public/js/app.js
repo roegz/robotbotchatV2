@@ -5,17 +5,24 @@
 
 window.RBC = {};
 const RBC = window.RBC;
+RBC.socketReadyHandlers = [];
+RBC.onSocketReady = function (fn) {
+  RBC.socketReadyHandlers.push(fn);
+};
 
 RBC.state = {
   token: null,
   me: null, // { id, pseudo }
   friends: [], // [{ id, pseudo, online }]
   pendingRequests: [], // [{ requestId, fromId, fromPseudo, createdAt }]
+  groups: [], // [{ id, name, ownerId, members:[{id,pseudo}] }]
   activeFriendId: null,
+  activeGroupId: null,
   socket: null,
 };
 
 const AVATAR_PALETTE = ['#3F6652', '#7A5A3A', '#4C6A8A', '#8A4C6A', '#6A7A3A', '#B3462C', '#5A5A9A'];
+const GROUP_COLOR = '#C08A2E';
 
 // --------------------------- utilitaires ---------------------------
 
@@ -77,10 +84,28 @@ function makeAvatar(pseudo, online) {
   return div;
 }
 
+function makeGroupAvatar(name) {
+  const div = document.createElement('div');
+  div.className = 'avatar';
+  div.style.background = GROUP_COLOR;
+  div.textContent = (name.trim().charAt(0) || '?').toUpperCase();
+  return div;
+}
+
 function getFriendById(id) {
   return RBC.state.friends.find((f) => f.id === id) || null;
 }
 RBC.getFriendById = getFriendById;
+
+function getGroupById(id) {
+  return RBC.state.groups.find((g) => g.id === id) || null;
+}
+
+function upsertGroup(group) {
+  const idx = RBC.state.groups.findIndex((g) => g.id === group.id);
+  if (idx >= 0) RBC.state.groups[idx] = group;
+  else RBC.state.groups.push(group);
+}
 
 function isNearBottom(el) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 100;
@@ -151,6 +176,7 @@ function showApp() {
   connectSocket();
   loadFriends();
   loadRequests();
+  loadGroups();
 }
 
 function logout() {
@@ -161,7 +187,9 @@ function logout() {
     me: null,
     friends: [],
     pendingRequests: [],
+    groups: [],
     activeFriendId: null,
+    activeGroupId: null,
     socket: null,
   };
   appScreen.hidden = true;
@@ -207,6 +235,7 @@ function connectSocket() {
     friend.online = online;
     updateFriendPresenceInList(userId, online);
     if (RBC.state.activeFriendId === userId) updateChatHeaderStatus(friend);
+    if (!online && typeof RBC.closeGameIfPeer === 'function') RBC.closeGameIfPeer(userId);
   });
 
   socket.on('friend:request:incoming', (req) => {
@@ -225,9 +254,33 @@ function connectSocket() {
     }
   });
 
-  // permet a call.js de brancher ses propres ecouteurs (appel video)
+  socket.on('group:message:new', (msg) => {
+    if (RBC.state.activeGroupId === msg.groupId) {
+      const messagesEl = document.getElementById('messages');
+      const wasNearBottom = isNearBottom(messagesEl);
+      appendDayDividerIfNeeded(msg.createdAt);
+      appendGroupMessageNode(msg);
+      if (wasNearBottom || msg.from === RBC.state.me.id) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    } else if (msg.from !== RBC.state.me.id) {
+      const group = getGroupById(msg.groupId);
+      const sender = group ? group.members.find((m) => m.id === msg.from) : null;
+      showToast(
+        (sender ? sender.pseudo : 'Quelqu\u2019un') + ' a ecrit dans ' + (group ? group.name : 'un groupe') + '.'
+      );
+    }
+  });
+
+  socket.on('group:updated', (group) => {
+    upsertGroup(group);
+    renderGroupsList();
+    if (RBC.state.activeGroupId === group.id) updateGroupChatHeader(group);
+  });
+
+  // permet a call.js / game.js de brancher leurs propres ecouteurs
   // une fois que la connexion socket existe.
-  if (typeof RBC.onSocketReady === 'function') RBC.onSocketReady(socket);
+  RBC.socketReadyHandlers.forEach((fn) => fn(socket));
 }
 
 // --------------------------- liste d'amis ---------------------------
@@ -304,20 +357,30 @@ function updateChatHeaderStatus(friend) {
   avatarSlot.appendChild(makeAvatar(friend.pseudo, friend.online));
 }
 
+function setChatHeaderMode(mode) {
+  const isGroup = mode === 'group';
+  document.getElementById('btn-call-audio').hidden = isGroup;
+  document.getElementById('btn-call-video').hidden = isGroup;
+  document.getElementById('btn-group-add-member').hidden = !isGroup;
+}
+
 async function openChat(friendId) {
   const friend = getFriendById(friendId);
   if (!friend) return;
   RBC.state.activeFriendId = friendId;
+  RBC.state.activeGroupId = null;
   lastMsgDayKey = null;
 
   chatEmptyEl.hidden = true;
   chatActiveEl.hidden = false;
+  setChatHeaderMode('friend');
   document.getElementById('chat-header-name').textContent = friend.pseudo;
   updateChatHeaderStatus(friend);
 
   friendsListEl.querySelectorAll('.friend-item').forEach((el) => {
     el.classList.toggle('is-active', el.dataset.id === friendId);
   });
+  groupsListEl.querySelectorAll('.group-item').forEach((el) => el.classList.remove('is-active'));
 
   appScreen.classList.remove('view-list');
   appScreen.classList.add('view-chat');
@@ -382,15 +445,50 @@ function appendMessageNode(msg) {
   messagesEl.appendChild(row);
 }
 
+function appendGroupMessageNode(msg) {
+  const isMine = msg.from === RBC.state.me.id;
+  const row = document.createElement('div');
+  row.className = 'msg-row ' + (isMine ? 'is-mine' : 'is-theirs');
+  let container = row;
+  if (!isMine) {
+    const col = document.createElement('div');
+    col.className = 'msg-col';
+    const group = getGroupById(RBC.state.activeGroupId);
+    const sender = group ? group.members.find((m) => m.id === msg.from) : null;
+    const label = document.createElement('div');
+    label.className = 'msg-sender';
+    label.textContent = sender ? sender.pseudo : 'Inconnu';
+    col.appendChild(label);
+    row.appendChild(col);
+    container = col;
+  }
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.textContent = msg.content;
+  const time = document.createElement('span');
+  time.className = 'msg-time';
+  time.textContent = new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  bubble.appendChild(time);
+  container.appendChild(bubble);
+  messagesEl.appendChild(row);
+}
+
 document.getElementById('form-message').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = document.getElementById('message-input');
   const content = input.value.trim();
-  if (!content || !RBC.state.activeFriendId || !RBC.state.socket) return;
-  input.value = '';
-  RBC.state.socket.emit('message:send', { to: RBC.state.activeFriendId, content }, (ack) => {
-    if (!ack || !ack.ok) showToast((ack && ack.error) || "Impossible d'envoyer le message.", true);
-  });
+  if (!content || !RBC.state.socket) return;
+  if (RBC.state.activeGroupId) {
+    input.value = '';
+    RBC.state.socket.emit('group:message:send', { groupId: RBC.state.activeGroupId, content }, (ack) => {
+      if (!ack || !ack.ok) showToast((ack && ack.error) || "Impossible d'envoyer le message.", true);
+    });
+  } else if (RBC.state.activeFriendId) {
+    input.value = '';
+    RBC.state.socket.emit('message:send', { to: RBC.state.activeFriendId, content }, (ack) => {
+      if (!ack || !ack.ok) showToast((ack && ack.error) || "Impossible d'envoyer le message.", true);
+    });
+  }
 });
 
 // --------------------------- modales ---------------------------
@@ -568,6 +666,201 @@ async function respondToRequest(reqItem, accept, li) {
 document.getElementById('btn-requests').addEventListener('click', () => {
   openModal('modal-requests');
 });
+
+// --------------------------- groupes ---------------------------
+
+const groupsListEl = document.getElementById('groups-list');
+const groupsEmptyEl = document.getElementById('groups-empty');
+
+async function loadGroups() {
+  try {
+    RBC.state.groups = await api('/api/groups');
+    renderGroupsList();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+function renderGroupsList() {
+  groupsListEl.querySelectorAll('.group-item').forEach((el) => el.parentElement.remove());
+  groupsEmptyEl.hidden = RBC.state.groups.length > 0;
+  RBC.state.groups.forEach((group) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'friend-item group-item';
+    btn.dataset.id = group.id;
+    if (group.id === RBC.state.activeGroupId) btn.classList.add('is-active');
+    btn.appendChild(makeGroupAvatar(group.name));
+    const textWrap = document.createElement('div');
+    textWrap.className = 'friend-text';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'friend-name';
+    nameEl.textContent = group.name;
+    const statusEl = document.createElement('div');
+    statusEl.className = 'friend-status';
+    statusEl.textContent = group.members.length + ' membres';
+    textWrap.appendChild(nameEl);
+    textWrap.appendChild(statusEl);
+    btn.appendChild(textWrap);
+    btn.addEventListener('click', () => openGroupChat(group.id));
+    li.appendChild(btn);
+    groupsListEl.appendChild(li);
+  });
+}
+
+function updateGroupChatHeader(group) {
+  document.getElementById('chat-header-name').textContent = group.name;
+  document.getElementById('chat-header-status').textContent = group.members.length + ' membres';
+  const avatarSlot = document.getElementById('chat-header-avatar');
+  avatarSlot.innerHTML = '';
+  avatarSlot.appendChild(makeGroupAvatar(group.name));
+}
+
+async function openGroupChat(groupId) {
+  const group = getGroupById(groupId);
+  if (!group) return;
+  RBC.state.activeFriendId = null;
+  RBC.state.activeGroupId = groupId;
+  lastMsgDayKey = null;
+
+  chatEmptyEl.hidden = true;
+  chatActiveEl.hidden = false;
+  setChatHeaderMode('group');
+  updateGroupChatHeader(group);
+
+  friendsListEl.querySelectorAll('.friend-item').forEach((el) => el.classList.remove('is-active'));
+  groupsListEl.querySelectorAll('.group-item').forEach((el) => {
+    el.classList.toggle('is-active', el.dataset.id === groupId);
+  });
+
+  appScreen.classList.remove('view-list');
+  appScreen.classList.add('view-chat');
+
+  messagesEl.innerHTML = '';
+  try {
+    const history = await api('/api/groups/' + groupId + '/messages');
+    history.forEach((msg) => {
+      appendDayDividerIfNeeded(msg.createdAt);
+      appendGroupMessageNode(msg);
+    });
+    requestAnimationFrame(() => {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    });
+  } catch (err) {
+    showToast(err.message, true);
+  }
+  document.getElementById('message-input').focus();
+}
+
+document.getElementById('btn-create-group').addEventListener('click', () => {
+  document.getElementById('group-name-input').value = '';
+  renderGroupMembersPicker();
+  openModal('modal-create-group');
+});
+
+function renderGroupMembersPicker() {
+  const list = document.getElementById('group-members-picker');
+  list.innerHTML = '';
+  if (RBC.state.friends.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'result-tag';
+    li.style.padding = '8px';
+    li.textContent = "Tu n'as pas encore d'amis a ajouter.";
+    list.appendChild(li);
+    return;
+  }
+  RBC.state.friends.forEach((friend) => {
+    const li = document.createElement('li');
+    li.className = 'search-result-item';
+    li.appendChild(makeAvatar(friend.pseudo, friend.online));
+    const name = document.createElement('div');
+    name.className = 'result-name';
+    name.textContent = friend.pseudo;
+    li.appendChild(name);
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = friend.id;
+    checkbox.className = 'group-member-checkbox';
+    li.appendChild(checkbox);
+    list.appendChild(li);
+  });
+}
+
+document.getElementById('btn-confirm-create-group').addEventListener('click', async () => {
+  const name = document.getElementById('group-name-input').value.trim();
+  if (!name) {
+    showToast('Donne un nom au groupe.', true);
+    return;
+  }
+  const memberIds = Array.from(document.querySelectorAll('.group-member-checkbox:checked')).map((cb) => cb.value);
+  try {
+    const group = await api('/api/groups', { method: 'POST', body: { name, memberIds } });
+    upsertGroup(group);
+    renderGroupsList();
+    closeModals();
+    showToast('Groupe cree : ' + group.name + '.');
+    openGroupChat(group.id);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+});
+
+document.getElementById('btn-group-add-member').addEventListener('click', () => {
+  if (!RBC.state.activeGroupId) return;
+  renderGroupAddList();
+  openModal('modal-group-members');
+});
+
+function renderGroupAddList() {
+  const list = document.getElementById('group-add-list');
+  list.innerHTML = '';
+  const group = getGroupById(RBC.state.activeGroupId);
+  if (!group) return;
+  const memberIds = new Set(group.members.map((m) => m.id));
+  const candidates = RBC.state.friends.filter((f) => !memberIds.has(f.id));
+  if (candidates.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'result-tag';
+    li.style.padding = '8px';
+    li.textContent = 'Tous tes amis sont deja dans ce groupe.';
+    list.appendChild(li);
+    return;
+  }
+  candidates.forEach((friend) => {
+    const li = document.createElement('li');
+    li.className = 'search-result-item';
+    li.appendChild(makeAvatar(friend.pseudo, friend.online));
+    const name = document.createElement('div');
+    name.className = 'result-name';
+    name.textContent = friend.pseudo;
+    li.appendChild(name);
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-secondary';
+    btn.style.padding = '7px 12px';
+    btn.style.fontSize = '13px';
+    btn.textContent = 'Ajouter';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const updated = await api('/api/groups/' + group.id + '/members', {
+          method: 'POST',
+          body: { memberId: friend.id },
+        });
+        upsertGroup(updated);
+        renderGroupsList();
+        if (RBC.state.activeGroupId === updated.id) updateGroupChatHeader(updated);
+        li.remove();
+        showToast(friend.pseudo + ' a ete ajoute au groupe.');
+      } catch (err) {
+        btn.disabled = false;
+        showToast(err.message, true);
+      }
+    });
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
 
 // --------------------------- demarrage ---------------------------
 

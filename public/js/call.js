@@ -305,7 +305,7 @@ btnToggleCam.addEventListener('click', () => {
 
 // --------------------------- branchement des evenements socket ---------------------------
 
-RBC.onSocketReady = function (socketInstance) {
+RBC.onSocketReady(function (socketInstance) {
   socketInstance.on('call:incoming', handleIncomingCall);
   socketInstance.on('call:accepted', handleCallAccepted);
   socketInstance.on('call:rejected', handleCallRejected);
@@ -317,4 +317,4 @@ RBC.onSocketReady = function (socketInstance) {
   socketInstance.on('disconnect', () => {
     if (currentCallPeerId) endCall(true);
   });
-};
+});

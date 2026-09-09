@@ -13,8 +13,8 @@ db.js             -> stockage des données (fichier JSON local)
 public/           -> tout ce qui s'affiche dans le navigateur
   index.html
   css/style.css
-  js/app.js       -> connexion, amis, messages
-  js/call.js      -> appels vidéo (WebRTC)
+  js/app.js       -> connexion, amis, groupes, messages
+  js/call.js      -> appels audio/vidéo (WebRTC)
 ```
 
 Pas de base de données externe à installer, pas d'outil de build : c'est du
@@ -41,6 +41,15 @@ Chaque message est automatiquement supprimé **24h après avoir été envoyé**
 (le nettoyage tourne en arrière-plan sur le serveur, toutes les 15 minutes).
 Si tu préfères une autre durée, ou une suppression complète à heure fixe
 plutôt qu'un compte à rebours par message, dis-le-moi.
+
+## Le jeu de dessin
+
+Dans une discussion (ami ou groupe), le bouton "palette" en haut ouvre un
+dessin collaboratif en temps réel sur fond blanc. Avec un ami, il faut
+d'abord qu'il accepte (comme pour un appel) ; dans un groupe, ça s'ouvre
+directement puisque vous êtes déjà entre amis. Ça marche même pendant un
+appel (les deux tournent en parallèle). Bouton "Effacer" pour tout effacer,
+bouton "Arrêter" pour fermer la session.
 
 ## Déployer sur Render, étape par étape
 

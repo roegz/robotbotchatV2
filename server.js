@@ -193,6 +193,57 @@ app.get('/api/messages/:friendId', authRequired, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// API - groupes
+// ---------------------------------------------------------------------------
+
+app.get('/api/groups', authRequired, (req, res) => {
+  res.json(db.getGroupsForUser(req.userId).map(db.groupWithPseudos));
+});
+
+app.post('/api/groups', authRequired, (req, res) => {
+  const { name, memberIds } = req.body || {};
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 30) {
+    return res.status(400).json({ error: 'Nom de groupe invalide (1 a 30 caracteres).' });
+  }
+  const ids = Array.isArray(memberIds) ? memberIds.filter((id) => typeof id === 'string') : [];
+  const invalid = ids.some((id) => id !== req.userId && !db.areFriends(req.userId, id));
+  if (invalid) return res.status(400).json({ error: 'Tu ne peux ajouter que tes amis.' });
+
+  const group = db.createGroup(req.userId, name.trim(), ids);
+  const full = db.groupWithPseudos(group);
+  full.members.forEach((m) => {
+    if (m.id !== req.userId) io.to(m.id).emit('group:updated', full);
+  });
+  res.json(full);
+});
+
+app.post('/api/groups/:id/members', authRequired, (req, res) => {
+  const groupId = req.params.id;
+  if (!db.isGroupMember(groupId, req.userId)) {
+    return res.status(403).json({ error: "Tu n'es pas membre de ce groupe." });
+  }
+  const memberId = req.body && req.body.memberId;
+  if (typeof memberId !== 'string') return res.status(400).json({ error: 'Ami invalide.' });
+  if (!db.areFriends(req.userId, memberId)) {
+    return res.status(400).json({ error: 'Tu ne peux ajouter que tes amis.' });
+  }
+  const group = db.addMemberToGroup(groupId, memberId);
+  if (!group) return res.status(404).json({ error: 'Groupe introuvable.' });
+
+  const full = db.groupWithPseudos(group);
+  full.members.forEach((m) => io.to(m.id).emit('group:updated', full));
+  res.json(full);
+});
+
+app.get('/api/groups/:id/messages', authRequired, (req, res) => {
+  const groupId = req.params.id;
+  if (!db.isGroupMember(groupId, req.userId)) {
+    return res.status(403).json({ error: "Tu n'es pas membre de ce groupe." });
+  }
+  res.json(db.getGroupConversation(groupId));
+});
+
+// ---------------------------------------------------------------------------
 // Socket.IO - temps reel (messages + appels video)
 // ---------------------------------------------------------------------------
 
@@ -244,6 +295,29 @@ io.on('connection', (socket) => {
     }
   });
 
+  // --- Messages de groupe ---
+  socket.on('group:message:send', (payload, ack) => {
+    try {
+      const groupId = payload && payload.groupId;
+      let content = payload && payload.content;
+      content = typeof content === 'string' ? content.trim() : '';
+      if (!groupId || !content || content.length > 2000) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Message vide ou invalide.' });
+        return;
+      }
+      if (!db.isGroupMember(groupId, uid)) {
+        if (typeof ack === 'function') ack({ ok: false, error: "Tu n'es pas membre de ce groupe." });
+        return;
+      }
+      const msg = db.saveGroupMessage(groupId, uid, content);
+      const group = db.getGroupById(groupId);
+      group.members.forEach((memberId) => io.to(memberId).emit('group:message:new', msg));
+      if (typeof ack === 'function') ack({ ok: true, message: msg });
+    } catch (e) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Erreur serveur.' });
+    }
+  });
+
   // --- Signalisation WebRTC (appel audio/video) ---
   // Le serveur ne fait que relayer les messages entre les deux amis, tout le
   // traitement audio/video se fait directement entre les deux navigateurs.
@@ -280,6 +354,48 @@ io.on('connection', (socket) => {
     io.to(to).emit('call:end', { fromId: uid });
   });
 
+  // --- Dessin en direct avec un ami (invitation a accepter/refuser, comme un appel) ---
+  socket.on('draw:invite', ({ to } = {}) => {
+    if (!to || !db.areFriends(uid, to)) return;
+    io.to(to).emit('draw:incoming', { fromId: uid, fromPseudo: socket.pseudo });
+  });
+  socket.on('draw:accept', ({ to } = {}) => {
+    if (to) io.to(to).emit('draw:accepted', { fromId: uid });
+  });
+  socket.on('draw:reject', ({ to } = {}) => {
+    if (to) io.to(to).emit('draw:rejected', { fromId: uid });
+  });
+  socket.on('draw:cancel', ({ to } = {}) => {
+    if (to) io.to(to).emit('draw:cancelled', { fromId: uid });
+  });
+  socket.on('draw:stroke', ({ to, stroke } = {}) => {
+    if (!to || !stroke || !db.areFriends(uid, to)) return;
+    io.to(to).emit('draw:stroke', { fromId: uid, stroke });
+  });
+  socket.on('draw:clear', ({ to } = {}) => {
+    if (!to || !db.areFriends(uid, to)) return;
+    io.to(to).emit('draw:clear', { fromId: uid });
+  });
+  socket.on('draw:end', ({ to } = {}) => {
+    if (to) io.to(to).emit('draw:end', { fromId: uid });
+  });
+
+  // --- Dessin en direct dans un groupe (pas d'invitation, deja entre amis) ---
+  socket.on('draw:group:stroke', ({ groupId, stroke } = {}) => {
+    if (!groupId || !stroke || !db.isGroupMember(groupId, uid)) return;
+    const group = db.getGroupById(groupId);
+    group.members.forEach((memberId) => {
+      if (memberId !== uid) io.to(memberId).emit('draw:group:stroke', { groupId, fromId: uid, stroke });
+    });
+  });
+  socket.on('draw:group:clear', ({ groupId } = {}) => {
+    if (!groupId || !db.isGroupMember(groupId, uid)) return;
+    const group = db.getGroupById(groupId);
+    group.members.forEach((memberId) => {
+      if (memberId !== uid) io.to(memberId).emit('draw:group:clear', { groupId, fromId: uid });
+    });
+  });
+
   socket.on('disconnect', () => {
     const set = onlineUsers.get(uid);
     if (!set) return;
@@ -299,4 +415,8 @@ server.listen(PORT, () => {
 // On le fait au demarrage (au cas ou le serveur etait eteint depuis un moment)
 // puis toutes les 15 minutes.
 db.purgeOldMessages();
-setInterval(() => db.purgeOldMessages(), 15 * 60 * 1000);
+db.purgeOldGroupMessages();
+setInterval(() => {
+  db.purgeOldMessages();
+  db.purgeOldGroupMessages();
+}, 15 * 60 * 1000);
