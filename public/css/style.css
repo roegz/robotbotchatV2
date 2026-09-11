@@ -863,6 +863,119 @@ ul {
   box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--ink);
 }
 
+/* ----------------------------- Sidebar : jeu solo ----------------------------- */
+
+.sidebar-footer {
+  padding: 10px 16px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ----------------------------- Appel de groupe ----------------------------- */
+
+.group-call-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  padding: 14px;
+  background: #0d0d0a;
+  align-content: flex-start;
+}
+.gc-tile {
+  position: relative;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gc-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.gc-tile-avatar {
+  width: 64px;
+  height: 64px;
+  font-size: 24px;
+}
+.gc-tile-label {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+/* ----------------------------- Jeu solo ----------------------------- */
+
+.solo-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#solo-canvas {
+  background: #ffffff;
+  touch-action: none;
+}
+.solo-score {
+  font-weight: 700;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+}
+.solo-overlay-message {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+  padding: 20px;
+  font-weight: 600;
+}
+.solo-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px;
+  border-top: 1px solid var(--border);
+}
+.solo-dir-row {
+  display: flex;
+  gap: 6px;
+}
+.solo-dir-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  background: var(--surface-alt);
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.solo-dir-btn:active {
+  background: var(--accent-soft);
+}
+
 /* ----------------------------- Notifications ----------------------------- */
 
 .toast-container {

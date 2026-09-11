@@ -51,6 +51,29 @@ directement puisque vous êtes déjà entre amis. Ça marche même pendant un
 appel (les deux tournent en parallèle). Bouton "Effacer" pour tout effacer,
 bouton "Arrêter" pour fermer la session.
 
+## Appel de groupe
+
+Dans une discussion de groupe, deux boutons dans l'en-tête permettent de
+lancer ou rejoindre un appel de groupe, en audio seulement ou avec la
+caméra. Pas besoin d'accepter une invitation : comme c'est déjà un groupe
+d'amis, cliquer sur le bouton rejoint direct l'appel en cours (ou le
+démarre si personne n'est encore dedans). Les autres membres du groupe
+reçoivent une petite notification quand un appel démarre.
+
+Techniquement, chaque participant se connecte directement à chacun des
+autres (pas de serveur audio/vidéo central) : c'est simple et fiable, mais
+adapté à de petits groupes — au-delà de 5-6 personnes en même temps, ça
+devient lourd pour les navigateurs. Si un jour tu as besoin de groupes plus
+grands, il faudrait passer par un serveur média dédié — dis-le-moi.
+
+## Petit jeu solo
+
+Un bouton "Petit jeu solo" en bas de la liste d'amis ouvre un Snake tout
+simple, pour patienter quand il n'y a personne en ligne. Flèches du clavier
+ou boutons à l'écran (pratique sur mobile). Le meilleur score est gardé
+dans le navigateur (pas besoin d'être connecté à qui que ce soit, ça ne
+passe pas par le serveur).
+
 ## Déployer sur Render, étape par étape
 
 **1. Mettre le code sur GitHub** (Render déploie depuis un repo Git)

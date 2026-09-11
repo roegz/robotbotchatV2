@@ -72,6 +72,17 @@ function isOnline(userId) {
   return onlineUsers.has(userId) && onlineUsers.get(userId).size > 0;
 }
 
+// participants actuellement dans un appel de groupe : groupId -> Map(userId -> { pseudo, video })
+const groupCallParticipants = new Map();
+
+function broadcastGroupCallStatus(groupId) {
+  const group = db.getGroupById(groupId);
+  if (!group) return;
+  const participants = groupCallParticipants.get(groupId);
+  const count = participants ? participants.size : 0;
+  group.members.forEach((memberId) => io.to(memberId).emit('group:call:status', { groupId, count }));
+}
+
 // ---------------------------------------------------------------------------
 // API - authentification
 // ---------------------------------------------------------------------------
@@ -396,14 +407,66 @@ io.on('connection', (socket) => {
     });
   });
 
+  // --- Appel de groupe (maillage : chaque paire de participants a sa propre connexion) ---
+  socket.on('group:call:join', ({ groupId, video } = {}) => {
+    if (!groupId || !db.isGroupMember(groupId, uid)) return;
+    if (!groupCallParticipants.has(groupId)) groupCallParticipants.set(groupId, new Map());
+    const participants = groupCallParticipants.get(groupId);
+    if (participants.has(uid)) return; // deja dans l'appel (autre onglet), on ignore
+    const existing = Array.from(participants.entries()).map(([id, info]) => ({
+      id,
+      pseudo: info.pseudo,
+      video: info.video,
+    }));
+    participants.set(uid, { pseudo: socket.pseudo, video: !!video });
+    socket.emit('group:call:joined', { groupId, participants: existing });
+    existing.forEach((p) => {
+      io.to(p.id).emit('group:call:peer-joined', { groupId, fromId: uid, fromPseudo: socket.pseudo, video: !!video });
+    });
+    broadcastGroupCallStatus(groupId);
+  });
+
+  socket.on('group:call:leave', ({ groupId } = {}) => {
+    if (!groupId) return;
+    const participants = groupCallParticipants.get(groupId);
+    if (!participants || !participants.has(uid)) return;
+    participants.delete(uid);
+    if (participants.size === 0) groupCallParticipants.delete(groupId);
+    participants.forEach((info, memberId) => io.to(memberId).emit('group:call:peer-left', { groupId, fromId: uid }));
+    broadcastGroupCallStatus(groupId);
+  });
+
+  socket.on('group:call:offer', ({ groupId, to, sdp } = {}) => {
+    if (!to || !sdp) return;
+    io.to(to).emit('group:call:offer', { groupId, fromId: uid, sdp });
+  });
+  socket.on('group:call:answer', ({ groupId, to, sdp } = {}) => {
+    if (!to || !sdp) return;
+    io.to(to).emit('group:call:answer', { groupId, fromId: uid, sdp });
+  });
+  socket.on('group:call:ice-candidate', ({ groupId, to, candidate } = {}) => {
+    if (!to || !candidate) return;
+    io.to(to).emit('group:call:ice-candidate', { groupId, fromId: uid, candidate });
+  });
+
   socket.on('disconnect', () => {
     const set = onlineUsers.get(uid);
-    if (!set) return;
-    set.delete(socket.id);
-    if (set.size === 0) {
-      onlineUsers.delete(uid);
-      db.getFriends(uid).forEach((f) => io.to(f.id).emit('presence:update', { userId: uid, online: false }));
+    if (set) {
+      set.delete(socket.id);
+      if (set.size === 0) {
+        onlineUsers.delete(uid);
+        db.getFriends(uid).forEach((f) => io.to(f.id).emit('presence:update', { userId: uid, online: false }));
+      }
     }
+    // si la personne etait dans un appel de groupe, on previent les autres participants
+    groupCallParticipants.forEach((participants, groupId) => {
+      if (participants.has(uid)) {
+        participants.delete(uid);
+        participants.forEach((info, memberId) => io.to(memberId).emit('group:call:peer-left', { groupId, fromId: uid }));
+        if (participants.size === 0) groupCallParticipants.delete(groupId);
+        broadcastGroupCallStatus(groupId);
+      }
+    });
   });
 });
 

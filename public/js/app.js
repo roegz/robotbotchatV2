@@ -362,6 +362,8 @@ function setChatHeaderMode(mode) {
   document.getElementById('btn-call-audio').hidden = isGroup;
   document.getElementById('btn-call-video').hidden = isGroup;
   document.getElementById('btn-group-add-member').hidden = !isGroup;
+  document.getElementById('btn-group-call-audio').hidden = !isGroup;
+  document.getElementById('btn-group-call-video').hidden = !isGroup;
 }
 
 async function openChat(friendId) {

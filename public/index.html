@@ -94,6 +94,10 @@
         <li class="friends-empty" id="groups-empty">Pas encore de groupe. Clique sur « Créer un groupe ».</li>
       </ul>
     </div>
+
+    <div class="sidebar-footer">
+      <button id="btn-solo-game" class="btn btn-ghost btn-block">Petit jeu solo</button>
+    </div>
   </aside>
 
   <main class="chat-panel">
@@ -115,6 +119,12 @@
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
         </button>
         <button id="btn-call-video" class="icon-btn call-btn" title="Appeler en vidéo" aria-label="Appeler en vidéo">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+        </button>
+        <button id="btn-group-call-audio" class="icon-btn call-btn" title="Appel de groupe (audio)" aria-label="Appel de groupe audio" hidden>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        </button>
+        <button id="btn-group-call-video" class="icon-btn call-btn" title="Appel de groupe (vidéo)" aria-label="Appel de groupe vidéo" hidden>
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
         </button>
         <button id="btn-group-add-member" class="icon-btn call-btn" title="Ajouter un ami au groupe" aria-label="Ajouter un ami au groupe" hidden>
@@ -266,9 +276,57 @@
 
 <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
+<!-- ===================== APPEL DE GROUPE ===================== -->
+<div id="group-call-active" class="call-active" hidden>
+  <div class="call-active-top">
+    <span id="group-call-title"></span>
+    <span id="group-call-status"></span>
+  </div>
+  <div class="group-call-grid" id="group-call-grid"></div>
+  <div class="call-controls">
+    <button id="btn-gc-toggle-mic" class="icon-btn call-control" aria-label="Micro">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v4"/></svg>
+    </button>
+    <button id="btn-gc-toggle-cam" class="icon-btn call-control" aria-label="Caméra">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+    </button>
+    <button id="btn-gc-hangup" class="icon-btn call-control call-control-danger" aria-label="Quitter l'appel">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11z"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- ===================== JEU SOLO (SNAKE) ===================== -->
+<div id="solo-game-overlay" class="game-overlay" hidden>
+  <div class="game-top">
+    <span>Petit jeu solo</span>
+    <div class="game-top-actions">
+      <span id="solo-score" class="solo-score"></span>
+      <button id="btn-solo-close" class="btn btn-ghost">Fermer</button>
+    </div>
+  </div>
+  <div class="solo-canvas-wrap">
+    <canvas id="solo-canvas"></canvas>
+    <div id="solo-overlay-message" class="solo-overlay-message" hidden>
+      <p id="solo-overlay-text"></p>
+      <button id="btn-solo-restart" class="btn btn-primary">Rejouer</button>
+    </div>
+  </div>
+  <div class="solo-controls">
+    <button type="button" class="solo-dir-btn" data-dir="up" aria-label="Haut">▲</button>
+    <div class="solo-dir-row">
+      <button type="button" class="solo-dir-btn" data-dir="left" aria-label="Gauche">◀</button>
+      <button type="button" class="solo-dir-btn" data-dir="down" aria-label="Bas">▼</button>
+      <button type="button" class="solo-dir-btn" data-dir="right" aria-label="Droite">▶</button>
+    </div>
+  </div>
+</div>
+
 <script src="/socket.io/socket.io.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/call.js"></script>
 <script src="/js/game.js"></script>
+<script src="/js/groupcall.js"></script>
+<script src="/js/solo.js"></script>
 </body>
 </html>
