@@ -12,7 +12,15 @@ const DB_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DB_DIR, 'db.json');
 
 function emptyDB() {
-  return { users: [], friendRequests: [], friendships: [], messages: [], groups: [], groupMessages: [] };
+  return {
+    users: [],
+    friendRequests: [],
+    friendships: [],
+    messages: [],
+    groups: [],
+    groupMessages: [],
+    generalMessages: [],
+  };
 }
 
 let db = emptyDB();
@@ -30,6 +38,7 @@ function load() {
       db.messages = db.messages || [];
       db.groups = db.groups || [];
       db.groupMessages = db.groupMessages || [];
+      db.generalMessages = db.generalMessages || [];
     } else {
       db = emptyDB();
       persist();
@@ -240,6 +249,40 @@ function getGroupConversation(groupId, limit = 300) {
   return msgs.slice(-limit);
 }
 
+// ---------- Salon "Général" (ouvert à tous les comptes, sans lien d'amitié) ----------
+
+function saveGeneralMessage(fromId, fromPseudo, content) {
+  const msg = { id: uuidv4(), from: fromId, fromPseudo, content, createdAt: Date.now() };
+  db.generalMessages.push(msg);
+  persist();
+  return msg;
+}
+
+function purgeOldGeneralMessages() {
+  const cutoff = Date.now() - MESSAGE_TTL_MS;
+  const before = db.generalMessages.length;
+  db.generalMessages = db.generalMessages.filter((m) => m.createdAt >= cutoff);
+  if (db.generalMessages.length !== before) persist();
+}
+
+function getGeneralConversation(limit = 300) {
+  purgeOldGeneralMessages();
+  const msgs = db.generalMessages.slice().sort((a, b) => a.createdAt - b.createdAt);
+  return msgs.slice(-limit);
+}
+
+// ---------- Statistiques (pour le panel admin : uniquement des compteurs) ----------
+
+function getStats() {
+  return {
+    totalUsers: db.users.length,
+    totalMessages: db.messages.length + db.groupMessages.length + db.generalMessages.length,
+    totalGroups: db.groups.length,
+    totalFriendships: db.friendships.length,
+    pendingRequests: db.friendRequests.filter((r) => r.status === 'pending').length,
+  };
+}
+
 module.exports = {
   getUserByPseudo,
   getUserById,
@@ -264,4 +307,8 @@ module.exports = {
   saveGroupMessage,
   getGroupConversation,
   purgeOldGroupMessages,
+  saveGeneralMessage,
+  purgeOldGeneralMessages,
+  getGeneralConversation,
+  getStats,
 };

@@ -18,6 +18,7 @@ RBC.state = {
   groups: [], // [{ id, name, ownerId, members:[{id,pseudo}] }]
   activeFriendId: null,
   activeGroupId: null,
+  activeGeneral: false,
   socket: null,
 };
 
@@ -190,6 +191,7 @@ function logout() {
     groups: [],
     activeFriendId: null,
     activeGroupId: null,
+    activeGeneral: false,
     socket: null,
   };
   appScreen.hidden = true;
@@ -272,6 +274,20 @@ function connectSocket() {
     }
   });
 
+  socket.on('general:message:new', (msg) => {
+    if (RBC.state.activeGeneral) {
+      const messagesEl = document.getElementById('messages');
+      const wasNearBottom = isNearBottom(messagesEl);
+      appendDayDividerIfNeeded(msg.createdAt);
+      appendGeneralMessageNode(msg);
+      if (wasNearBottom || msg.from === RBC.state.me.id) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    } else if (msg.from !== RBC.state.me.id) {
+      showToast(msg.fromPseudo + ' a ecrit dans Général.');
+    }
+  });
+
   socket.on('group:updated', (group) => {
     upsertGroup(group);
     renderGroupsList();
@@ -348,6 +364,7 @@ function cssEscape(str) {
 const chatEmptyEl = document.getElementById('chat-empty');
 const chatActiveEl = document.getElementById('chat-active');
 const messagesEl = document.getElementById('messages');
+const generalBtn = document.getElementById('general-channel-btn');
 let lastMsgDayKey = null;
 
 function updateChatHeaderStatus(friend) {
@@ -359,11 +376,13 @@ function updateChatHeaderStatus(friend) {
 
 function setChatHeaderMode(mode) {
   const isGroup = mode === 'group';
-  document.getElementById('btn-call-audio').hidden = isGroup;
-  document.getElementById('btn-call-video').hidden = isGroup;
+  const isGeneral = mode === 'general';
+  document.getElementById('btn-call-audio').hidden = isGroup || isGeneral;
+  document.getElementById('btn-call-video').hidden = isGroup || isGeneral;
   document.getElementById('btn-group-add-member').hidden = !isGroup;
   document.getElementById('btn-group-call-audio').hidden = !isGroup;
   document.getElementById('btn-group-call-video').hidden = !isGroup;
+  document.getElementById('btn-game').hidden = isGeneral;
 }
 
 async function openChat(friendId) {
@@ -371,6 +390,7 @@ async function openChat(friendId) {
   if (!friend) return;
   RBC.state.activeFriendId = friendId;
   RBC.state.activeGroupId = null;
+  RBC.state.activeGeneral = false;
   lastMsgDayKey = null;
 
   chatEmptyEl.hidden = true;
@@ -383,6 +403,7 @@ async function openChat(friendId) {
     el.classList.toggle('is-active', el.dataset.id === friendId);
   });
   groupsListEl.querySelectorAll('.group-item').forEach((el) => el.classList.remove('is-active'));
+  generalBtn.classList.remove('is-active');
 
   appScreen.classList.remove('view-list');
   appScreen.classList.add('view-chat');
@@ -475,12 +496,43 @@ function appendGroupMessageNode(msg) {
   messagesEl.appendChild(row);
 }
 
+function appendGeneralMessageNode(msg) {
+  const isMine = msg.from === RBC.state.me.id;
+  const row = document.createElement('div');
+  row.className = 'msg-row ' + (isMine ? 'is-mine' : 'is-theirs');
+  let container = row;
+  if (!isMine) {
+    const col = document.createElement('div');
+    col.className = 'msg-col';
+    const label = document.createElement('div');
+    label.className = 'msg-sender';
+    label.textContent = msg.fromPseudo || 'Inconnu';
+    col.appendChild(label);
+    row.appendChild(col);
+    container = col;
+  }
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.textContent = msg.content;
+  const time = document.createElement('span');
+  time.className = 'msg-time';
+  time.textContent = new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  bubble.appendChild(time);
+  container.appendChild(bubble);
+  messagesEl.appendChild(row);
+}
+
 document.getElementById('form-message').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = document.getElementById('message-input');
   const content = input.value.trim();
   if (!content || !RBC.state.socket) return;
-  if (RBC.state.activeGroupId) {
+  if (RBC.state.activeGeneral) {
+    input.value = '';
+    RBC.state.socket.emit('general:message:send', { content }, (ack) => {
+      if (!ack || !ack.ok) showToast((ack && ack.error) || "Impossible d'envoyer le message.", true);
+    });
+  } else if (RBC.state.activeGroupId) {
     input.value = '';
     RBC.state.socket.emit('group:message:send', { groupId: RBC.state.activeGroupId, content }, (ack) => {
       if (!ack || !ack.ok) showToast((ack && ack.error) || "Impossible d'envoyer le message.", true);
@@ -724,6 +776,7 @@ async function openGroupChat(groupId) {
   if (!group) return;
   RBC.state.activeFriendId = null;
   RBC.state.activeGroupId = groupId;
+  RBC.state.activeGeneral = false;
   lastMsgDayKey = null;
 
   chatEmptyEl.hidden = true;
@@ -735,6 +788,7 @@ async function openGroupChat(groupId) {
   groupsListEl.querySelectorAll('.group-item').forEach((el) => {
     el.classList.toggle('is-active', el.dataset.id === groupId);
   });
+  generalBtn.classList.remove('is-active');
 
   appScreen.classList.remove('view-list');
   appScreen.classList.add('view-chat');
@@ -754,6 +808,48 @@ async function openGroupChat(groupId) {
   }
   document.getElementById('message-input').focus();
 }
+
+async function openGeneralChat() {
+  RBC.state.activeFriendId = null;
+  RBC.state.activeGroupId = null;
+  RBC.state.activeGeneral = true;
+  lastMsgDayKey = null;
+
+  chatEmptyEl.hidden = true;
+  chatActiveEl.hidden = false;
+  setChatHeaderMode('general');
+  document.getElementById('chat-header-name').textContent = 'Général';
+  document.getElementById('chat-header-status').textContent = 'salon ouvert à tous les comptes';
+  const avatarSlot = document.getElementById('chat-header-avatar');
+  avatarSlot.innerHTML = '';
+  const avatarDiv = document.createElement('div');
+  avatarDiv.className = 'avatar avatar-general';
+  avatarDiv.textContent = '#';
+  avatarSlot.appendChild(avatarDiv);
+
+  friendsListEl.querySelectorAll('.friend-item').forEach((el) => el.classList.remove('is-active'));
+  groupsListEl.querySelectorAll('.group-item').forEach((el) => el.classList.remove('is-active'));
+  generalBtn.classList.add('is-active');
+
+  appScreen.classList.remove('view-list');
+  appScreen.classList.add('view-chat');
+
+  messagesEl.innerHTML = '';
+  try {
+    const history = await api('/api/general/messages');
+    history.forEach((msg) => {
+      appendDayDividerIfNeeded(msg.createdAt);
+      appendGeneralMessageNode(msg);
+    });
+    requestAnimationFrame(() => {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    });
+  } catch (err) {
+    showToast(err.message, true);
+  }
+  document.getElementById('message-input').focus();
+}
+generalBtn.addEventListener('click', openGeneralChat);
 
 document.getElementById('btn-create-group').addEventListener('click', () => {
   document.getElementById('group-name-input').value = '';

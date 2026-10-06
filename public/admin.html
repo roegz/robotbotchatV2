@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Panel admin — robotbotchatV2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/css/style.css" />
+<style>
+  /* Petits ajouts propres à cette page, dans le même esprit sobre que le reste du site. */
+  .admin-screen {
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .admin-card {
+    width: 100%;
+    max-width: 420px;
+  }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 18px;
+  }
+  .stat-box {
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+  }
+  .stat-box .stat-value {
+    font-family: var(--font-display);
+    font-size: 26px;
+    color: var(--accent-dark);
+    font-weight: 600;
+  }
+  .stat-box .stat-label {
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-top: 2px;
+  }
+  .admin-note {
+    margin-top: 18px;
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    line-height: 1.5;
+  }
+  .admin-refresh {
+    margin-top: 14px;
+  }
+</style>
+</head>
+<body>
+
+<div id="admin-login-screen" class="auth-screen admin-screen">
+  <div class="auth-card admin-card">
+    <div class="brand">
+      <h1>Panel admin</h1>
+    </div>
+    <p class="brand-tagline">Accès réservé — statistiques globales uniquement.</p>
+
+    <form id="form-admin-login" class="auth-form">
+      <label>
+        <span>Pseudo admin</span>
+        <input type="text" id="admin-pseudo" autocomplete="username" required placeholder="robotbot" />
+      </label>
+      <label>
+        <span>Mot de passe</span>
+        <input type="password" id="admin-password" autocomplete="current-password" required placeholder="••••••••" />
+      </label>
+      <button type="submit" class="btn btn-primary btn-block">Se connecter</button>
+      <p class="auth-error" id="admin-login-error"></p>
+    </form>
+  </div>
+</div>
+
+<div id="admin-stats-screen" class="admin-screen" hidden>
+  <div class="auth-card admin-card">
+    <div class="brand">
+      <h1>Statistiques globales</h1>
+    </div>
+    <p class="brand-tagline">Uniquement des compteurs — aucun pseudo, aucune adresse IP.</p>
+
+    <div class="stats-grid" id="stats-grid"></div>
+
+    <button id="btn-refresh-stats" class="btn btn-secondary btn-block admin-refresh">Actualiser</button>
+    <button id="btn-admin-logout" class="btn btn-ghost btn-block">Se déconnecter</button>
+
+    <p class="admin-note">
+      Ces chiffres ne comptent que des totaux (comptes, messages, groupes, amitiés,
+      demandes en attente, comptes actuellement connectés). Aucune donnée individuelle
+      n'est affichée ici, par respect de la vie privée des personnes qui utilisent le site.
+    </p>
+  </div>
+</div>
+
+<script>
+// Logique du panel admin (stats globales uniquement), intégrée directement
+// dans cette page : un seul fichier, rien d'autre à uploader pour ce panel.
+
+const STAT_LABELS = {
+  totalUsers: 'Comptes créés',
+  totalMessages: 'Messages envoyés',
+  totalGroups: 'Groupes créés',
+  totalFriendships: 'Amitiés',
+  pendingRequests: 'Demandes en attente',
+  onlineUsers: 'Comptes en ligne',
+};
+
+const loginScreen = document.getElementById('admin-login-screen');
+const statsScreen = document.getElementById('admin-stats-screen');
+const formLogin = document.getElementById('form-admin-login');
+const loginError = document.getElementById('admin-login-error');
+const statsGrid = document.getElementById('stats-grid');
+
+async function adminApi(path, options = {}) {
+  const token = sessionStorage.getItem('rbc_admin_token');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(path, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = null;
+  }
+  if (!res.ok) throw new Error((data && data.error) || 'Erreur serveur.');
+  return data;
+}
+
+function renderStats(stats) {
+  statsGrid.innerHTML = '';
+  Object.keys(STAT_LABELS).forEach((key) => {
+    if (typeof stats[key] === 'undefined') return;
+    const box = document.createElement('div');
+    box.className = 'stat-box';
+    const value = document.createElement('div');
+    value.className = 'stat-value';
+    value.textContent = String(stats[key]);
+    const label = document.createElement('div');
+    label.className = 'stat-label';
+    label.textContent = STAT_LABELS[key];
+    box.appendChild(value);
+    box.appendChild(label);
+    statsGrid.appendChild(box);
+  });
+}
+
+async function loadStats() {
+  try {
+    const stats = await adminApi('/api/admin/stats');
+    renderStats(stats);
+  } catch (err) {
+    showLogin(err.message);
+  }
+}
+
+function showLogin(message) {
+  sessionStorage.removeItem('rbc_admin_token');
+  loginScreen.hidden = false;
+  statsScreen.hidden = true;
+  loginError.textContent = message || '';
+}
+
+function showStats() {
+  loginScreen.hidden = true;
+  statsScreen.hidden = false;
+  loginError.textContent = '';
+  loadStats();
+}
+
+formLogin.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pseudo = document.getElementById('admin-pseudo').value.trim();
+  const password = document.getElementById('admin-password').value;
+  loginError.textContent = '';
+  try {
+    const data = await adminApi('/api/admin/login', { method: 'POST', body: { pseudo, password } });
+    sessionStorage.setItem('rbc_admin_token', data.token);
+    document.getElementById('admin-password').value = '';
+    showStats();
+  } catch (err) {
+    loginError.textContent = err.message;
+  }
+});
+
+document.getElementById('btn-refresh-stats').addEventListener('click', loadStats);
+document.getElementById('btn-admin-logout').addEventListener('click', () => showLogin());
+
+(function boot() {
+  const saved = sessionStorage.getItem('rbc_admin_token');
+  if (saved) showStats();
+  else showLogin();
+})();
+</script>
+</body>
+</html>

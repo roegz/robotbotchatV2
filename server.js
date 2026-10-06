@@ -30,6 +30,19 @@ if (!JWT_SECRET) {
 }
 const TOKEN_LIFETIME = '90d'; // duree de connexion : reste connecte 90 jours sans se reconnecter
 
+// Panel admin : pseudo reserve + mot de passe uniquement dans une variable
+// d'environnement Render (jamais en clair dans le code, le repo est public).
+// Sans ADMIN_PASSWORD defini sur Render, la connexion admin reste desactivee.
+const ADMIN_PSEUDO = 'robotbot';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || null;
+if (!ADMIN_PASSWORD) {
+  console.warn(
+    '[robotbotchatV2] Aucune variable ADMIN_PASSWORD definie : le panel admin restera inaccessible tant que ' +
+      "cette variable n'est pas ajoutee sur Render (Environment -> Add Environment Variable)."
+  );
+}
+const ADMIN_TOKEN_LIFETIME = '12h';
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -66,6 +79,23 @@ function authRequired(req, res, next) {
   }
 }
 
+function signAdminToken() {
+  return jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: ADMIN_TOKEN_LIFETIME });
+}
+
+function adminRequired(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Non connecte.' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (payload.role !== 'admin') return res.status(403).json({ error: 'Acces refuse.' });
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'Session invalide, reconnecte-toi.' });
+  }
+}
+
 // qui est en ligne : userId -> Set(socket.id)  (Set pour gerer plusieurs onglets/appareils)
 const onlineUsers = new Map();
 function isOnline(userId) {
@@ -96,6 +126,9 @@ app.post('/api/register', (req, res) => {
   }
   if (typeof password !== 'string' || password.length < 4) {
     return res.status(400).json({ error: 'Le mot de passe doit faire au moins 4 caracteres.' });
+  }
+  if (pseudo.toLowerCase() === ADMIN_PSEUDO.toLowerCase()) {
+    return res.status(409).json({ error: 'Ce pseudo est reserve.' });
   }
   if (db.getUserByPseudo(pseudo)) {
     return res.status(409).json({ error: 'Ce pseudo est deja pris.' });
@@ -255,6 +288,39 @@ app.get('/api/groups/:id/messages', authRequired, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// API - salon "General" (ouvert a tous les comptes, sans besoin d'etre ami)
+// ---------------------------------------------------------------------------
+
+app.get('/api/general/messages', authRequired, (req, res) => {
+  res.json(db.getGeneralConversation());
+});
+
+// ---------------------------------------------------------------------------
+// API - panel admin (stats globales uniquement : pas de pseudos, pas d'IP)
+// ---------------------------------------------------------------------------
+
+app.post('/api/admin/login', (req, res) => {
+  const { pseudo, password } = req.body || {};
+  if (!ADMIN_PASSWORD) {
+    return res.status(503).json({
+      error: "Panel admin non configure sur ce serveur (variable ADMIN_PASSWORD manquante sur Render).",
+    });
+  }
+  const pseudoOk = typeof pseudo === 'string' && pseudo.toLowerCase() === ADMIN_PSEUDO.toLowerCase();
+  const passwordOk = typeof password === 'string' && password === ADMIN_PASSWORD;
+  if (!pseudoOk || !passwordOk) {
+    return res.status(401).json({ error: 'Identifiants incorrects.' });
+  }
+  res.json({ token: signAdminToken() });
+});
+
+app.get('/api/admin/stats', adminRequired, (req, res) => {
+  const stats = db.getStats();
+  stats.onlineUsers = onlineUsers.size;
+  res.json(stats);
+});
+
+// ---------------------------------------------------------------------------
 // Socket.IO - temps reel (messages + appels video)
 // ---------------------------------------------------------------------------
 
@@ -274,6 +340,7 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   const uid = socket.userId;
   socket.join(uid); // une "room" par utilisateur : simplifie l'envoi cible, peu importe le nombre d'onglets ouverts
+  socket.join('general'); // tout compte connecte est automatiquement dans le salon General
 
   const wasOffline = !isOnline(uid);
   if (!onlineUsers.has(uid)) onlineUsers.set(uid, new Set());
@@ -323,6 +390,23 @@ io.on('connection', (socket) => {
       const msg = db.saveGroupMessage(groupId, uid, content);
       const group = db.getGroupById(groupId);
       group.members.forEach((memberId) => io.to(memberId).emit('group:message:new', msg));
+      if (typeof ack === 'function') ack({ ok: true, message: msg });
+    } catch (e) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Erreur serveur.' });
+    }
+  });
+
+  // --- Salon "General" (ouvert a tous, pas besoin d'etre ami) ---
+  socket.on('general:message:send', (payload, ack) => {
+    try {
+      let content = payload && payload.content;
+      content = typeof content === 'string' ? content.trim() : '';
+      if (!content || content.length > 2000) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Message vide ou invalide.' });
+        return;
+      }
+      const msg = db.saveGeneralMessage(uid, socket.pseudo, content);
+      io.to('general').emit('general:message:new', msg);
       if (typeof ack === 'function') ack({ ok: true, message: msg });
     } catch (e) {
       if (typeof ack === 'function') ack({ ok: false, error: 'Erreur serveur.' });
@@ -479,7 +563,9 @@ server.listen(PORT, () => {
 // puis toutes les 15 minutes.
 db.purgeOldMessages();
 db.purgeOldGroupMessages();
+db.purgeOldGeneralMessages();
 setInterval(() => {
   db.purgeOldMessages();
   db.purgeOldGroupMessages();
+  db.purgeOldGeneralMessages();
 }, 15 * 60 * 1000);
