@@ -792,6 +792,39 @@ ul {
   font-size: 40px;
   box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.08);
 }
+.device-panel {
+  position: absolute;
+  right: 16px;
+  bottom: 86px;
+  z-index: 5;
+  background: #1c1c16;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 240px;
+  max-width: calc(100vw - 32px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.device-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  color: #d9d6c9;
+}
+.device-panel select {
+  background: #2a2a22;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 13.5px;
+  font-family: inherit;
+}
+
 .call-controls {
   display: flex;
   justify-content: center;

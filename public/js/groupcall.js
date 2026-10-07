@@ -20,6 +20,11 @@ const btnGroupCallVideo = document.getElementById('btn-group-call-video');
 const btnGcToggleMic = document.getElementById('btn-gc-toggle-mic');
 const btnGcToggleCam = document.getElementById('btn-gc-toggle-cam');
 const btnGcHangup = document.getElementById('btn-gc-hangup');
+const btnGcDevices = document.getElementById('btn-gc-devices');
+const gcDevicePanel = document.getElementById('gc-device-panel');
+const gcMicSelect = document.getElementById('gc-mic-select');
+const gcCamSelect = document.getElementById('gc-cam-select');
+const gcCamSelectWrap = document.getElementById('gc-cam-select-wrap');
 
 let gcGroupId = null;
 let gcWithVideo = true;
@@ -108,11 +113,22 @@ async function joinGroupCall(groupId, withVideo) {
     RBC.showToast('Tu es deja en appel de groupe.', true);
     return;
   }
+  // getPreferredDeviceId / PREFERRED_MIC_KEY / PREFERRED_CAM_KEY sont definis
+  // dans call.js (meme choix de peripherique que l'appel 1-a-1).
+  const micId = getPreferredDeviceId(PREFERRED_MIC_KEY);
+  const camId = withVideo ? getPreferredDeviceId(PREFERRED_CAM_KEY) : null;
   try {
-    gcLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+    gcLocalStream = await navigator.mediaDevices.getUserMedia({
+      audio: micId ? { deviceId: { exact: micId } } : true,
+      video: withVideo ? (camId ? { deviceId: { exact: camId } } : true) : false,
+    });
   } catch (e) {
-    RBC.showToast("Impossible d'acceder au micro" + (withVideo ? '/a la camera' : '') + '.', true);
-    return;
+    try {
+      gcLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+    } catch (e2) {
+      RBC.showToast("Impossible d'acceder au micro" + (withVideo ? '/a la camera' : '') + '.', true);
+      return;
+    }
   }
   gcGroupId = groupId;
   gcWithVideo = withVideo;
@@ -135,6 +151,9 @@ async function joinGroupCall(groupId, withVideo) {
   avatarEl.hidden = withVideo;
   gcLocalTile = { tile, videoEl, avatarEl };
 
+  gcCamSelectWrap.hidden = !withVideo;
+  populateDeviceSelects(gcMicSelect, withVideo ? gcCamSelect : null, gcLocalStream); // defini dans call.js
+
   socket().emit('group:call:join', { groupId, video: withVideo });
 }
 
@@ -156,6 +175,7 @@ function leaveGroupCall() {
   }
   gcGroupId = null;
   gcOverlayEl.hidden = true;
+  gcDevicePanel.hidden = true;
 }
 
 btnGroupCallAudio.addEventListener('click', () => {
@@ -181,6 +201,30 @@ btnGcToggleCam.addEventListener('click', () => {
     gcLocalTile.videoEl.hidden = !gcCamEnabled;
     gcLocalTile.avatarEl.hidden = gcCamEnabled;
   }
+});
+
+// --------------------------- panneau de choix micro / camera ---------------------------
+
+btnGcDevices.addEventListener('click', () => {
+  gcDevicePanel.hidden = !gcDevicePanel.hidden;
+});
+
+// En appel de groupe, changer de peripherique doit remplacer la piste sur
+// CHAQUE connexion ouverte avec les autres participants (maillage) : un seul
+// getUserMedia, puis la meme nouvelle piste est donnee a tout le monde
+// (switchMediaDevice gere un tableau de connexions, voir call.js).
+gcMicSelect.addEventListener('change', () => {
+  if (!gcLocalStream || !gcMicSelect.value) return;
+  const peerConnections = Array.from(gcPeers.values()).map((entry) => entry.pc);
+  switchMediaDevice('audio', gcMicSelect.value, gcLocalStream, peerConnections, PREFERRED_MIC_KEY, gcMicEnabled);
+});
+
+gcCamSelect.addEventListener('change', () => {
+  if (!gcLocalStream || !gcCamSelect.value) return;
+  const peerConnections = Array.from(gcPeers.values()).map((entry) => entry.pc);
+  switchMediaDevice('video', gcCamSelect.value, gcLocalStream, peerConnections, PREFERRED_CAM_KEY, gcCamEnabled).then(() => {
+    if (gcLocalTile) gcLocalTile.videoEl.srcObject = gcLocalStream; // force le rafraichissement de l'aperçu local
+  });
 });
 
 // --------------------------- signalisation ---------------------------

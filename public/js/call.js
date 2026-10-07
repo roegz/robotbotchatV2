@@ -55,6 +55,12 @@ const callVideoWrapEl = document.querySelector('.call-video-wrap');
 const callAudioVisualEl = document.getElementById('call-audio-visual');
 const callAudioAvatarSlot = document.getElementById('call-audio-avatar-slot');
 
+const btnCallDevices = document.getElementById('btn-call-devices');
+const callDevicePanel = document.getElementById('call-device-panel');
+const callMicSelect = document.getElementById('call-mic-select');
+const callCamSelect = document.getElementById('call-cam-select');
+const callCamSelectWrap = document.getElementById('call-cam-select-wrap');
+
 let pc = null;
 let localStream = null;
 let currentCallPeerId = null;
@@ -69,10 +75,122 @@ function socket() {
   return RBC.state.socket;
 }
 
-async function getLocalStream(withVideo) {
+// --------------------------- choix du micro / de la camera ---------------------------
+// Comme sur Discord : on peut choisir quel microphone/quelle camera utiliser,
+// avant ou pendant l'appel, et le choix est retenu pour la prochaine fois.
+
+const PREFERRED_MIC_KEY = 'rbc_preferred_mic_id';
+const PREFERRED_CAM_KEY = 'rbc_preferred_cam_id';
+
+function getPreferredDeviceId(key) {
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+    return localStorage.getItem(key) || null;
+  } catch (e) {
+    return null;
+  }
+}
+function setPreferredDeviceId(key, id) {
+  try {
+    if (id) localStorage.setItem(key, id);
+    else localStorage.removeItem(key);
+  } catch (e) {
+    // tant pis, le choix ne sera juste pas retenu la prochaine fois
+  }
+}
+
+async function listInputDevices(kind) {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((d) => d.kind === kind);
+  } catch (e) {
+    return [];
+  }
+}
+
+function fillDeviceSelect(selectEl, devices, activeDeviceId, fallbackLabel) {
+  selectEl.innerHTML = '';
+  if (devices.length === 0) {
+    const opt = document.createElement('option');
+    opt.textContent = fallbackLabel;
+    opt.disabled = true;
+    selectEl.appendChild(opt);
+    return;
+  }
+  devices.forEach((d, i) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || fallbackLabel + ' ' + (i + 1);
+    if (d.deviceId === activeDeviceId) opt.selected = true;
+    selectEl.appendChild(opt);
+  });
+}
+
+async function populateDeviceSelects(micSelectEl, camSelectEl, stream) {
+  const micDevices = await listInputDevices('audioinput');
+  const activeMicId = stream.getAudioTracks()[0] ? stream.getAudioTracks()[0].getSettings().deviceId : null;
+  fillDeviceSelect(micSelectEl, micDevices, activeMicId, 'Microphone');
+
+  if (camSelectEl) {
+    const camDevices = await listInputDevices('videoinput');
+    const activeCamId = stream.getVideoTracks()[0] ? stream.getVideoTracks()[0].getSettings().deviceId : null;
+    fillDeviceSelect(camSelectEl, camDevices, activeCamId, 'Caméra');
+  }
+}
+
+// Remplace la piste audio (ou video) en cours par une nouvelle venant d'un
+// autre peripherique, sans raccrocher : UN SEUL getUserMedia pour le nouveau
+// flux, puis RTCRtpSender.replaceTrack() sur chaque connexion ouverte (une
+// seule en appel 1-a-1, plusieurs en appel de groupe) pour le faire passer
+// dans l'appel en cours.
+async function switchMediaDevice(kind, deviceId, stream, peerConnections, savedKey, currentlyEnabled) {
+  const constraints = kind === 'audio' ? { audio: { deviceId: { exact: deviceId } } } : { video: { deviceId: { exact: deviceId } } };
+  let newStream;
+  try {
+    newStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (e) {
+    RBC.showToast('Impossible de basculer sur ce périphérique.', true);
+    return;
+  }
+  const newTrack = kind === 'audio' ? newStream.getAudioTracks()[0] : newStream.getVideoTracks()[0];
+  if (!newTrack) return;
+
+  const oldTracks = kind === 'audio' ? stream.getAudioTracks() : stream.getVideoTracks();
+  oldTracks.forEach((t) => {
+    stream.removeTrack(t);
+    t.stop();
+  });
+  stream.addTrack(newTrack);
+
+  newTrack.enabled = currentlyEnabled !== false;
+
+  const list = Array.isArray(peerConnections) ? peerConnections : peerConnections ? [peerConnections] : [];
+  list.forEach((peerConnection) => {
+    const sender = peerConnection.getSenders().find((s) => s.track && s.track.kind === kind);
+    if (sender) sender.replaceTrack(newTrack).catch(() => {});
+  });
+
+  setPreferredDeviceId(savedKey, deviceId);
+}
+
+async function getLocalStream(withVideo) {
+  const micId = getPreferredDeviceId(PREFERRED_MIC_KEY);
+  const camId = withVideo ? getPreferredDeviceId(PREFERRED_CAM_KEY) : null;
+  const constraints = {
+    audio: micId ? { deviceId: { exact: micId } } : true,
+    video: withVideo ? (camId ? { deviceId: { exact: camId } } : true) : false,
+  };
+  try {
+    return await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err) {
+    if (micId || camId) {
+      // Le peripherique prefere n'existe peut-etre plus (debranche) : on retente sans contrainte precise.
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+      } catch (err2) {
+        RBC.showToast("Impossible d'acceder au micro" + (withVideo ? '/a la camera' : '') + " (verifie les autorisations du navigateur).", true);
+        throw err2;
+      }
+    }
     RBC.showToast("Impossible d'acceder au micro" + (withVideo ? '/a la camera' : '') + " (verifie les autorisations du navigateur).", true);
     throw err;
   }
@@ -121,6 +239,9 @@ function openCallOverlay(peerPseudo, statusText, withVideo) {
   camEnabled = true;
   btnToggleMic.classList.remove('is-off');
   btnToggleCam.classList.remove('is-off');
+
+  callCamSelectWrap.hidden = !withVideo;
+  populateDeviceSelects(callMicSelect, withVideo ? callCamSelect : null, localStream);
 
   if (withVideo) {
     callVideoWrapEl.classList.remove('is-audio-call');
@@ -302,6 +423,7 @@ function endCall(silent) {
   callVideoWrapEl.classList.remove('is-audio-call');
   callAudioVisualEl.hidden = true;
   btnToggleCam.hidden = false;
+  callDevicePanel.hidden = true;
   if (!silent && peerId && socket()) {
     socket().emit('call:end', { to: peerId });
   }
@@ -329,6 +451,24 @@ btnToggleCam.addEventListener('click', () => {
   camEnabled = !camEnabled;
   localStream.getVideoTracks().forEach((t) => (t.enabled = camEnabled));
   btnToggleCam.classList.toggle('is-off', !camEnabled);
+});
+
+// --------------------------- panneau de choix micro / camera ---------------------------
+
+btnCallDevices.addEventListener('click', () => {
+  callDevicePanel.hidden = !callDevicePanel.hidden;
+});
+
+callMicSelect.addEventListener('change', () => {
+  if (!localStream || !callMicSelect.value) return;
+  switchMediaDevice('audio', callMicSelect.value, localStream, pc, PREFERRED_MIC_KEY, micEnabled);
+});
+
+callCamSelect.addEventListener('change', () => {
+  if (!localStream || !callCamSelect.value) return;
+  switchMediaDevice('video', callCamSelect.value, localStream, pc, PREFERRED_CAM_KEY, camEnabled).then(() => {
+    localVideoEl.srcObject = localStream; // force le rafraichissement de l'aperçu local
+  });
 });
 
 // --------------------------- branchement des evenements socket ---------------------------
