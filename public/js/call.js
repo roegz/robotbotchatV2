@@ -3,11 +3,36 @@
 // que de relais de signalisation (voir server.js) ; le flux audio/video passe
 // directement entre les deux navigateurs une fois la connexion etablie.
 //
-// Remarque : seuls des serveurs STUN publics sont utilises, pas de serveur
-// TURN. Ca fonctionne dans la grande majorite des cas, mais un appel peut
-// echouer si l'un des deux reseaux est tres restrictif (voir README).
+// Remarque : par defaut, seuls des serveurs STUN publics sont utilises (pas
+// de serveur TURN), ce qui peut echouer si l'un des deux reseaux est tres
+// restrictif (voir README). Si un serveur TURN est configure cote serveur
+// (variable TURN_CREDENTIALS_URL sur Render), RBC.state.iceServers contient
+// les identifiants recuperes via /api/ice-servers (voir app.js) et prend le
+// relais automatiquement ; sinon on retombe sur cette liste STUN par defaut.
 
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }];
+
+function currentIceServers() {
+  return RBC.state.iceServers && RBC.state.iceServers.length ? RBC.state.iceServers : ICE_SERVERS;
+}
+
+// Sur certains navigateurs (surtout iPhone/Safari), la lecture automatique
+// du son distant peut etre bloquee silencieusement (aucune erreur visible,
+// juste pas de son). Si ca arrive, on retente des que la personne touche
+// l'ecran d'appel : un "geste utilisateur" debloque toujours la lecture.
+function attemptAutoplay(mediaEl, retryContainerEl) {
+  const playPromise = mediaEl.play();
+  if (playPromise && typeof playPromise.catch === 'function') {
+    playPromise.catch(() => {
+      const resume = () => {
+        mediaEl.play().catch(() => {});
+      };
+      const target = retryContainerEl || document;
+      target.addEventListener('click', resume, { once: true });
+      target.addEventListener('touchend', resume, { once: true });
+    });
+  }
+}
 
 const callIncomingEl = document.getElementById('call-incoming');
 const callIncomingName = document.getElementById('call-incoming-name');
@@ -54,7 +79,7 @@ async function getLocalStream(withVideo) {
 }
 
 function createPeerConnection(peerId) {
-  const conn = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const conn = new RTCPeerConnection({ iceServers: currentIceServers() });
 
   localStream.getTracks().forEach((track) => conn.addTrack(track, localStream));
 
@@ -66,6 +91,7 @@ function createPeerConnection(peerId) {
 
   conn.ontrack = (event) => {
     remoteVideoEl.srcObject = event.streams[0];
+    attemptAutoplay(remoteVideoEl, callActiveEl);
     callActiveStatus.textContent = 'en cours';
   };
 
@@ -97,12 +123,14 @@ function openCallOverlay(peerPseudo, statusText, withVideo) {
   btnToggleCam.classList.remove('is-off');
 
   if (withVideo) {
-    callVideoWrapEl.hidden = false;
+    callVideoWrapEl.classList.remove('is-audio-call');
     callAudioVisualEl.hidden = true;
     localVideoEl.srcObject = localStream;
     btnToggleCam.hidden = false;
   } else {
-    callVideoWrapEl.hidden = true;
+    // Jamais `hidden` ici (voir la regle CSS .is-audio-call) : ca couperait
+    // le son distant sur pas mal de mobiles.
+    callVideoWrapEl.classList.add('is-audio-call');
     callAudioVisualEl.hidden = false;
     callAudioAvatarSlot.innerHTML = '';
     const bigAvatar = document.createElement('div');
@@ -271,7 +299,7 @@ function endCall(silent) {
   callIncomingEl.hidden = true;
   localVideoEl.srcObject = null;
   remoteVideoEl.srcObject = null;
-  callVideoWrapEl.hidden = false;
+  callVideoWrapEl.classList.remove('is-audio-call');
   callAudioVisualEl.hidden = true;
   btnToggleCam.hidden = false;
   if (!silent && peerId && socket()) {

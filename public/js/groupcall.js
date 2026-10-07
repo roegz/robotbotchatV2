@@ -42,7 +42,10 @@ function gcCreateTile(peerId, pseudo) {
   const video = document.createElement('video');
   video.autoplay = true;
   video.playsInline = true;
-  video.hidden = true;
+  // Jamais de `hidden` sur cette video : elle porte le son distant, et la
+  // mettre en display:none peut couper ce son sur certains mobiles. Sans
+  // camera, c'est l'avatar (ajoute juste apres, par-dessus) qui la recouvre
+  // visuellement — voir la regle CSS .gc-tile-avatar.
 
   const avatar = document.createElement('div');
   avatar.className = 'avatar gc-tile-avatar';
@@ -61,7 +64,7 @@ function gcCreateTile(peerId, pseudo) {
 }
 
 function gcCreatePeerConnection(peerId) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const pc = new RTCPeerConnection({ iceServers: currentIceServers() }); // defini dans call.js (meme liste STUN/TURN que l'appel 1-a-1)
   gcLocalStream.getTracks().forEach((track) => pc.addTrack(track, gcLocalStream));
 
   pc.onicecandidate = (e) => {
@@ -72,7 +75,10 @@ function gcCreatePeerConnection(peerId) {
     if (!entry) return;
     const hasVideo = e.streams[0].getVideoTracks().length > 0;
     entry.videoEl.srcObject = e.streams[0];
-    entry.videoEl.hidden = !hasVideo;
+    attemptAutoplay(entry.videoEl, gcOverlayEl); // defini dans call.js
+    // On ne met JAMAIS la video en `hidden` : ca couperait son son sur pas
+    // mal de mobiles. Sans camera, l'avatar la recouvre juste visuellement
+    // (voir la regle CSS .gc-tile-avatar), mais le son continue de jouer.
     entry.avatarEl.hidden = hasVideo;
   };
   pc.onconnectionstatechange = () => {

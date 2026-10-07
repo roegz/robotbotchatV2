@@ -745,6 +745,20 @@ ul {
   position: relative;
   background: #0d0d0a;
 }
+/* Appel audio : on reduit la zone video a rien visuellement, mais SANS
+   jamais la mettre en display:none (contrairement a [hidden]) — un element
+   display:none peut voir sa lecture audio coupee ou mise en pause par
+   certains navigateurs mobiles (surtout iPhone/Safari). Avec ces regles,
+   #remote-video reste activement "affiche" (donc son lu normalement) tout
+   en etant invisible et en ne prenant aucune place. */
+.call-video-wrap.is-audio-call {
+  flex: 0 0 0;
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
 #remote-video {
   width: 100%;
   height: 100%;
@@ -905,10 +919,18 @@ ul {
   height: 100%;
   object-fit: cover;
 }
+/* Quand il n'y a pas de camera, l'avatar recouvre entierement la video
+   (au lieu de mettre la video en display:none) : la video continue d'etre
+   activement affichee donc son son n'est jamais coupe par le navigateur,
+   meme s'il n'y a rien d'interessant a voir dessus. */
 .gc-tile-avatar {
-  width: 64px;
-  height: 64px;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
   font-size: 24px;
+  z-index: 2;
 }
 .gc-tile-label {
   position: absolute;

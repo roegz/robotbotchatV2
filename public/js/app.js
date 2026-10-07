@@ -19,6 +19,7 @@ RBC.state = {
   activeFriendId: null,
   activeGroupId: null,
   activeGeneral: false,
+  iceServers: null, // rempli apres connexion via /api/ice-servers (STUN + TURN si configure)
   socket: null,
 };
 
@@ -178,6 +179,21 @@ function showApp() {
   loadFriends();
   loadRequests();
   loadGroups();
+  loadIceServers();
+}
+
+// Serveurs ICE (STUN/TURN) utilises pour les appels, recuperes aupres du
+// serveur (voir server.js). Par defaut null : call.js/groupcall.js retombent
+// alors sur leur liste STUN par defaut, exactement comme avant.
+async function loadIceServers() {
+  try {
+    const data = await api('/api/ice-servers');
+    if (data && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+      RBC.state.iceServers = data.iceServers;
+    }
+  } catch (err) {
+    // Tant pis : call.js/groupcall.js utiliseront leur liste STUN par defaut.
+  }
 }
 
 function logout() {

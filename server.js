@@ -43,6 +43,42 @@ if (!ADMIN_PASSWORD) {
 }
 const ADMIN_TOKEN_LIFETIME = '12h';
 
+// Serveur TURN (optionnel) : sans ca, les appels n'utilisent que des
+// serveurs STUN publics et echouent sur les reseaux tres restrictifs
+// (voir README). Si TURN_CREDENTIALS_URL est defini sur Render (ex. avec
+// un compte gratuit Metered.ca), le serveur va chercher des identifiants
+// TURN temporaires a cette URL et les transmet au navigateur.
+const TURN_CREDENTIALS_URL = process.env.TURN_CREDENTIALS_URL || null;
+const FALLBACK_ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+const TURN_CACHE_MS = 60 * 60 * 1000; // les identifiants sont temporaires : on les regenere toutes les heures
+let turnCache = { servers: null, fetchedAt: 0 };
+
+async function getIceServers() {
+  if (!TURN_CREDENTIALS_URL) return FALLBACK_ICE_SERVERS;
+  const now = Date.now();
+  if (turnCache.servers && now - turnCache.fetchedAt < TURN_CACHE_MS) return turnCache.servers;
+  try {
+    const response = await fetch(TURN_CREDENTIALS_URL);
+    if (!response.ok) throw new Error('reponse HTTP ' + response.status);
+    const data = await response.json();
+    if (Array.isArray(data) && data.length > 0) {
+      turnCache = { servers: data, fetchedAt: now };
+      return data;
+    }
+    throw new Error('reponse inattendue (pas un tableau de serveurs ICE)');
+  } catch (e) {
+    console.warn(
+      '[robotbotchatV2] Impossible de recuperer les identifiants TURN (' +
+        e.message +
+        '), les appels retombent sur STUN seul.'
+    );
+    return FALLBACK_ICE_SERVERS;
+  }
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -285,6 +321,15 @@ app.get('/api/groups/:id/messages', authRequired, (req, res) => {
     return res.status(403).json({ error: "Tu n'es pas membre de ce groupe." });
   }
   res.json(db.getGroupConversation(groupId));
+});
+
+// ---------------------------------------------------------------------------
+// API - serveurs ICE (STUN + TURN si configure) pour les appels audio/video
+// ---------------------------------------------------------------------------
+
+app.get('/api/ice-servers', authRequired, async (req, res) => {
+  const iceServers = await getIceServers();
+  res.json({ iceServers });
 });
 
 // ---------------------------------------------------------------------------
