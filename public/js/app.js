@@ -180,6 +180,7 @@ function showApp() {
   loadRequests();
   loadGroups();
   loadIceServers();
+  if (RBC.notify) RBC.notify.init();
 }
 
 // Serveurs ICE (STUN/TURN) utilises pour les appels, recuperes aupres du
@@ -197,6 +198,7 @@ async function loadIceServers() {
 }
 
 function logout() {
+  if (RBC.notify) RBC.notify.onLogout(); // lit encore le jeton : doit passer avant son effacement
   localStorage.removeItem('rbc_token');
   if (RBC.state.socket) RBC.state.socket.disconnect();
   RBC.state = {
@@ -245,6 +247,16 @@ function connectSocket() {
       const friend = getFriendById(msg.from);
       showToast((friend ? friend.pseudo : 'Quelqu\u2019un') + ' t\u2019a envoye un message.');
     }
+    if (msg.from !== RBC.state.me.id && RBC.notify) {
+      const friend = getFriendById(msg.from);
+      RBC.notify.newMessage({
+        title: friend ? friend.pseudo : 'Nouveau message',
+        body: msg.content.length > 120 ? msg.content.slice(0, 117) + '...' : msg.content,
+        tag: 'msg-' + msg.from,
+        data: { type: 'friend', friendId: msg.from },
+        viewingIt: RBC.state.activeFriendId === otherId,
+      });
+    }
   });
 
   socket.on('presence:update', ({ userId, online }) => {
@@ -287,6 +299,17 @@ function connectSocket() {
       showToast(
         (sender ? sender.pseudo : 'Quelqu\u2019un') + ' a ecrit dans ' + (group ? group.name : 'un groupe') + '.'
       );
+    }
+    if (msg.from !== RBC.state.me.id && RBC.notify) {
+      const group = getGroupById(msg.groupId);
+      const sender = group ? group.members.find((m) => m.id === msg.from) : null;
+      RBC.notify.newMessage({
+        title: group ? group.name : 'Groupe',
+        body: (sender ? sender.pseudo + ' : ' : '') + (msg.content.length > 120 ? msg.content.slice(0, 117) + '...' : msg.content),
+        tag: 'group-' + msg.groupId,
+        data: { type: 'group', groupId: msg.groupId },
+        viewingIt: RBC.state.activeGroupId === msg.groupId,
+      });
     }
   });
 

@@ -1103,3 +1103,9 @@ ul {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Cloche des notifications : barree tant que les notifications sont desactivees */
+#btn-notifications .bell-slash { display: none; }
+#btn-notifications.is-off .bell-slash { display: inline; }
+#btn-notifications.is-off { opacity: 0.65; }
+.sidebar-header { gap: 4px; }

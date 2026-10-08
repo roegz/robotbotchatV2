@@ -20,6 +20,7 @@ function emptyDB() {
     groups: [],
     groupMessages: [],
     generalMessages: [],
+    pushSubscriptions: [],
   };
 }
 
@@ -39,6 +40,7 @@ function load() {
       db.groups = db.groups || [];
       db.groupMessages = db.groupMessages || [];
       db.generalMessages = db.generalMessages || [];
+      db.pushSubscriptions = db.pushSubscriptions || [];
     } else {
       db = emptyDB();
       persist();
@@ -283,6 +285,34 @@ function getStats() {
   };
 }
 
+// ---------- Abonnements aux notifications push (appli fermee) ----------
+
+function addPushSubscription(userId, subscription) {
+  if (!subscription || typeof subscription.endpoint !== 'string' || !subscription.keys) return null;
+  // un meme appareil (endpoint) ne doit apparaitre qu'une fois : on remplace l'ancien
+  db.pushSubscriptions = db.pushSubscriptions.filter((s) => s.endpoint !== subscription.endpoint);
+  const entry = {
+    id: uuidv4(),
+    userId,
+    endpoint: subscription.endpoint,
+    keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
+    createdAt: Date.now(),
+  };
+  db.pushSubscriptions.push(entry);
+  persist();
+  return entry;
+}
+
+function removePushSubscriptionByEndpoint(endpoint) {
+  const before = db.pushSubscriptions.length;
+  db.pushSubscriptions = db.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+  if (db.pushSubscriptions.length !== before) persist();
+}
+
+function getPushSubscriptionsForUser(userId) {
+  return db.pushSubscriptions.filter((s) => s.userId === userId);
+}
+
 module.exports = {
   getUserByPseudo,
   getUserById,
@@ -311,4 +341,7 @@ module.exports = {
   purgeOldGeneralMessages,
   getGeneralConversation,
   getStats,
+  addPushSubscription,
+  removePushSubscriptionByEndpoint,
+  getPushSubscriptionsForUser,
 };

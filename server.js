@@ -11,6 +11,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const webpush = require('web-push');
 
 const db = require('./db');
 
@@ -77,6 +78,43 @@ async function getIceServers() {
     );
     return FALLBACK_ICE_SERVERS;
   }
+}
+
+// Notifications push (optionnel) : permettent d'etre prevenu d'un message ou
+// d'un appel meme quand le site est ferme. Il faut definir sur Render deux
+// variables d'environnement : VAPID_PUBLIC_KEY et VAPID_PRIVATE_KEY.
+// Sans elles, les notifications "appli fermee" sont desactivees (les
+// notifications quand le site est ouvert marchent quand meme).
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || null;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || null;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@robotbotchatv2.onrender.com';
+const PUSH_ENABLED = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (PUSH_ENABLED) {
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  } catch (e) {
+    console.warn('[robotbotchatV2] Cles VAPID invalides, notifications push desactivees :', e.message);
+  }
+} else {
+  console.warn(
+    '[robotbotchatV2] VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY non definies : pas de notifications quand le site est ferme.'
+  );
+}
+
+// Envoie une notification push a tous les appareils d'un utilisateur, mais
+// SEULEMENT s'il n'est pas deja connecte (sinon le site ouvert s'en charge).
+function sendPushToUser(userId, payload) {
+  if (!PUSH_ENABLED || isOnline(userId)) return;
+  const subs = db.getPushSubscriptionsForUser(userId);
+  subs.forEach((sub) => {
+    webpush
+      .sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify(payload), { TTL: 60 * 60 })
+      .catch((err) => {
+        if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+          db.removePushSubscriptionByEndpoint(sub.endpoint); // appareil desinscrit : on nettoie
+        }
+      });
+  });
 }
 
 const app = express();
@@ -333,6 +371,28 @@ app.get('/api/ice-servers', authRequired, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// API - notifications push
+// ---------------------------------------------------------------------------
+
+app.get('/api/push/public-key', authRequired, (req, res) => {
+  res.json({ publicKey: PUSH_ENABLED ? VAPID_PUBLIC_KEY : null });
+});
+
+app.post('/api/push/subscribe', authRequired, (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ error: 'Notifications push non configurees.' });
+  const sub = req.body && req.body.subscription;
+  const saved = db.addPushSubscription(req.userId, sub);
+  if (!saved) return res.status(400).json({ error: 'Abonnement invalide.' });
+  res.json({ ok: true });
+});
+
+app.post('/api/push/unsubscribe', authRequired, (req, res) => {
+  const endpoint = req.body && req.body.endpoint;
+  if (typeof endpoint === 'string') db.removePushSubscriptionByEndpoint(endpoint);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // API - salon "General" (ouvert a tous les comptes, sans besoin d'etre ami)
 // ---------------------------------------------------------------------------
 
@@ -412,6 +472,12 @@ io.on('connection', (socket) => {
       const msg = db.saveMessage(uid, to, content);
       io.to(to).emit('message:new', msg);
       io.to(uid).emit('message:new', msg); // pour resynchroniser les autres onglets de l'expediteur
+      sendPushToUser(to, {
+        title: socket.pseudo,
+        body: content.length > 120 ? content.slice(0, 117) + '...' : content,
+        tag: 'msg-' + uid,
+        data: { type: 'friend', friendId: uid },
+      });
       if (typeof ack === 'function') ack({ ok: true, message: msg });
     } catch (e) {
       if (typeof ack === 'function') ack({ ok: false, error: 'Erreur serveur.' });
@@ -434,7 +500,17 @@ io.on('connection', (socket) => {
       }
       const msg = db.saveGroupMessage(groupId, uid, content);
       const group = db.getGroupById(groupId);
-      group.members.forEach((memberId) => io.to(memberId).emit('group:message:new', msg));
+      group.members.forEach((memberId) => {
+        io.to(memberId).emit('group:message:new', msg);
+        if (memberId !== uid) {
+          sendPushToUser(memberId, {
+            title: group.name,
+            body: socket.pseudo + ' : ' + (content.length > 120 ? content.slice(0, 117) + '...' : content),
+            tag: 'group-' + groupId,
+            data: { type: 'group', groupId },
+          });
+        }
+      });
       if (typeof ack === 'function') ack({ ok: true, message: msg });
     } catch (e) {
       if (typeof ack === 'function') ack({ ok: false, error: 'Erreur serveur.' });
@@ -464,6 +540,13 @@ io.on('connection', (socket) => {
   socket.on('call:invite', ({ to, video } = {}) => {
     if (!to || !db.areFriends(uid, to)) return;
     io.to(to).emit('call:incoming', { fromId: uid, fromPseudo: socket.pseudo, video: !!video });
+    sendPushToUser(to, {
+      title: 'Appel entrant',
+      body: socket.pseudo + (video ? " t'appelle en vidéo" : " t'appelle"),
+      tag: 'call-' + uid,
+      requireInteraction: true,
+      data: { type: 'call', friendId: uid },
+    });
   });
   socket.on('call:accept', ({ to } = {}) => {
     if (!to) return;
