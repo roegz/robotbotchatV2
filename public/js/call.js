@@ -60,6 +60,7 @@ const callDevicePanel = document.getElementById('call-device-panel');
 const callMicSelect = document.getElementById('call-mic-select');
 const callCamSelect = document.getElementById('call-cam-select');
 const callCamSelectWrap = document.getElementById('call-cam-select-wrap');
+const btnToggleScreen = document.getElementById('btn-toggle-screen');
 
 let pc = null;
 let localStream = null;
@@ -70,6 +71,8 @@ let incomingCallWithVideo = true;
 let pendingCandidates = [];
 let micEnabled = true;
 let camEnabled = true;
+let screenTrack = null; // piste du partage d'ecran en cours (null si pas de partage)
+let remoteScreenOn = false; // l'autre personne partage son ecran
 
 function socket() {
   return RBC.state.socket;
@@ -200,6 +203,11 @@ function createPeerConnection(peerId) {
   const conn = new RTCPeerConnection({ iceServers: currentIceServers() });
 
   localStream.getTracks().forEach((track) => conn.addTrack(track, localStream));
+  // Appel audio : on reserve quand meme un emplacement video (vide). Le partage
+  // d'ecran viendra s'y brancher plus tard sans renegociation.
+  if (localStream.getVideoTracks().length === 0) {
+    conn.addTransceiver('video', { direction: 'sendrecv', streams: [localStream] });
+  }
 
   conn.onicecandidate = (event) => {
     if (event.candidate) {
@@ -208,6 +216,7 @@ function createPeerConnection(peerId) {
   };
 
   conn.ontrack = (event) => {
+    if (!event.streams[0]) return;
     remoteVideoEl.srcObject = event.streams[0];
     attemptAutoplay(remoteVideoEl, callActiveEl);
     callActiveStatus.textContent = 'en cours';
@@ -239,6 +248,9 @@ function openCallOverlay(peerPseudo, statusText, withVideo) {
   camEnabled = true;
   btnToggleMic.classList.remove('is-off');
   btnToggleCam.classList.remove('is-off');
+  btnToggleScreen.classList.remove('is-sharing');
+  remoteScreenOn = false;
+  callVideoWrapEl.classList.remove('is-screen');
 
   callCamSelectWrap.hidden = !withVideo;
   populateDeviceSelects(callMicSelect, withVideo ? callCamSelect : null, localStream);
@@ -246,6 +258,7 @@ function openCallOverlay(peerPseudo, statusText, withVideo) {
   if (withVideo) {
     callVideoWrapEl.classList.remove('is-audio-call');
     callAudioVisualEl.hidden = true;
+    localVideoEl.hidden = false;
     localVideoEl.srcObject = localStream;
     btnToggleCam.hidden = false;
   } else {
@@ -253,6 +266,7 @@ function openCallOverlay(peerPseudo, statusText, withVideo) {
     // le son distant sur pas mal de mobiles.
     callVideoWrapEl.classList.add('is-audio-call');
     callAudioVisualEl.hidden = false;
+    localVideoEl.hidden = true;
     callAudioAvatarSlot.innerHTML = '';
     const bigAvatar = document.createElement('div');
     bigAvatar.className = 'avatar call-audio-avatar-circle';
@@ -405,6 +419,12 @@ function handleIceCandidate({ fromId, candidate }) {
 
 function endCall(silent) {
   const peerId = currentCallPeerId;
+  if (screenTrack) {
+    screenTrack.onended = null;
+    screenTrack.stop();
+    screenTrack = null;
+  }
+  remoteScreenOn = false;
   if (pc) {
     pc.close();
     pc = null;
@@ -421,6 +441,9 @@ function endCall(silent) {
   localVideoEl.srcObject = null;
   remoteVideoEl.srcObject = null;
   callVideoWrapEl.classList.remove('is-audio-call');
+  callVideoWrapEl.classList.remove('is-screen');
+  localVideoEl.hidden = false;
+  btnToggleScreen.classList.remove('is-sharing');
   callAudioVisualEl.hidden = true;
   btnToggleCam.hidden = false;
   callDevicePanel.hidden = true;
@@ -466,7 +489,7 @@ callMicSelect.addEventListener('change', () => {
 
 callCamSelect.addEventListener('change', () => {
   if (!localStream || !callCamSelect.value) return;
-  switchMediaDevice('video', callCamSelect.value, localStream, pc, PREFERRED_CAM_KEY, camEnabled).then(() => {
+  switchMediaDevice('video', callCamSelect.value, localStream, screenTrack ? null : pc, PREFERRED_CAM_KEY, camEnabled).then(() => {
     localVideoEl.srcObject = localStream; // force le rafraichissement de l'aperçu local
   });
 });
@@ -482,7 +505,106 @@ RBC.onSocketReady(function (socketInstance) {
   socketInstance.on('call:answer', handleAnswer);
   socketInstance.on('call:ice-candidate', handleIceCandidate);
   socketInstance.on('call:end', handleRemoteEnd);
+  socketInstance.on('call:screen', handleRemoteScreen);
   socketInstance.on('disconnect', () => {
     if (currentCallPeerId) endCall(true);
   });
+});
+
+// --------------------------- partage d'ecran ---------------------------
+// Comme sur Discord : un bouton pour montrer son ecran a l'autre personne
+// pendant l'appel. L'ecran remplace la camera (ou occupe l'emplacement video
+// reserve en appel audio), puis la camera revient quand on arrete.
+// Fonctions partagees avec groupcall.js (charge apres ce fichier).
+
+function screenShareSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+}
+
+// Emplacement video (sender) d'une connexion : celui de la camera, ou celui
+// reserve a vide en appel audio.
+function findVideoSender(peerConnection) {
+  const t = peerConnection
+    .getTransceivers()
+    .find((tr) => tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'video');
+  return t ? t.sender : null;
+}
+
+// Ouvre le selecteur d'ecran/fenetre du navigateur. Renvoie la piste video, ou
+// null si la personne annule.
+async function captureScreenTrack() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const track = stream.getVideoTracks()[0] || null;
+    if (track && 'contentHint' in track) track.contentHint = 'detail'; // texte plus net
+    return track;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Affichage cote spectateur : si l'appel est audio, l'ecran partage fait apparaitre la video.
+function applyCallLayout() {
+  const showVideo = currentCallWithVideo || remoteScreenOn;
+  callVideoWrapEl.classList.toggle('is-audio-call', !showVideo);
+  callVideoWrapEl.classList.toggle('is-screen', remoteScreenOn);
+  callAudioVisualEl.hidden = showVideo;
+  localVideoEl.hidden = !currentCallWithVideo;
+}
+
+function handleRemoteScreen({ fromId, on }) {
+  if (fromId !== currentCallPeerId) return;
+  remoteScreenOn = !!on;
+  applyCallLayout();
+  if (on) attemptAutoplay(remoteVideoEl, callActiveEl);
+}
+
+async function startScreenShare() {
+  if (!pc || !localStream || screenTrack) return;
+  const track = await captureScreenTrack();
+  if (!track) return;
+  const sender = findVideoSender(pc);
+  if (!sender || !pc) {
+    track.stop();
+    RBC.showToast("Impossible de partager l'écran pour cet appel.", true);
+    return;
+  }
+  try {
+    await sender.replaceTrack(track);
+  } catch (e) {
+    track.stop();
+    RBC.showToast("Impossible de partager l'écran pour cet appel.", true);
+    return;
+  }
+  screenTrack = track;
+  track.onended = () => stopScreenShare(); // bouton "Arreter le partage" du navigateur
+  if (currentCallWithVideo) localVideoEl.srcObject = new MediaStream([track]);
+  btnToggleScreen.classList.add('is-sharing');
+  if (currentCallPeerId) socket().emit('call:screen', { to: currentCallPeerId, on: true });
+}
+
+async function stopScreenShare() {
+  if (!screenTrack) return;
+  const track = screenTrack;
+  screenTrack = null;
+  track.onended = null;
+  track.stop();
+  if (pc) {
+    const sender = findVideoSender(pc);
+    const cam = localStream ? localStream.getVideoTracks()[0] : null;
+    if (sender) await sender.replaceTrack(cam || null).catch(() => {});
+  }
+  if (currentCallWithVideo && localStream) localVideoEl.srcObject = localStream;
+  btnToggleScreen.classList.remove('is-sharing');
+  if (currentCallPeerId && socket()) socket().emit('call:screen', { to: currentCallPeerId, on: false });
+}
+
+// Sur telephone, les navigateurs ne savent pas partager l'ecran (mais savent
+// tres bien regarder celui des autres) : on cache simplement le bouton.
+if (!screenShareSupported()) {
+  btnToggleScreen.hidden = true;
+}
+btnToggleScreen.addEventListener('click', () => {
+  if (screenTrack) stopScreenShare();
+  else startScreenShare();
 });

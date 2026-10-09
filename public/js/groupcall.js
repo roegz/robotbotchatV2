@@ -25,6 +25,8 @@ const gcDevicePanel = document.getElementById('gc-device-panel');
 const gcMicSelect = document.getElementById('gc-mic-select');
 const gcCamSelect = document.getElementById('gc-cam-select');
 const gcCamSelectWrap = document.getElementById('gc-cam-select-wrap');
+const btnGcToggleScreen = document.getElementById('btn-gc-toggle-screen');
+let gcScreenTrack = null; // piste du partage d'ecran en cours (null si pas de partage)
 
 let gcGroupId = null;
 let gcWithVideo = true;
@@ -71,25 +73,39 @@ function gcCreateTile(peerId, pseudo) {
 function gcCreatePeerConnection(peerId) {
   const pc = new RTCPeerConnection({ iceServers: currentIceServers() }); // defini dans call.js (meme liste STUN/TURN que l'appel 1-a-1)
   gcLocalStream.getTracks().forEach((track) => pc.addTrack(track, gcLocalStream));
+  // Sans camera, on reserve quand meme un emplacement video (vide) pour que le
+  // partage d'ecran puisse s'y brancher plus tard sans renegociation.
+  if (gcLocalStream.getVideoTracks().length === 0) {
+    pc.addTransceiver('video', { direction: 'sendrecv', streams: [gcLocalStream] });
+  }
+  // Quelqu'un rejoint pendant qu'on partage notre ecran : il doit le voir tout de suite.
+  if (gcScreenTrack) {
+    const sender = findVideoSender(pc); // defini dans call.js
+    if (sender) sender.replaceTrack(gcScreenTrack).catch(() => {});
+  }
 
   pc.onicecandidate = (e) => {
     if (e.candidate) socket().emit('group:call:ice-candidate', { groupId: gcGroupId, to: peerId, candidate: e.candidate });
   };
   pc.ontrack = (e) => {
     const entry = gcPeers.get(peerId);
-    if (!entry) return;
-    const hasVideo = e.streams[0].getVideoTracks().length > 0;
+    if (!entry || !e.streams[0]) return;
     entry.videoEl.srcObject = e.streams[0];
     attemptAutoplay(entry.videoEl, gcOverlayEl); // defini dans call.js
-    // On ne met JAMAIS la video en `hidden` : ca couperait son son sur pas
-    // mal de mobiles. Sans camera, l'avatar la recouvre juste visuellement
-    // (voir la regle CSS .gc-tile-avatar), mais le son continue de jouer.
-    entry.avatarEl.hidden = hasVideo;
+    gcRefreshTile(entry);
   };
   pc.onconnectionstatechange = () => {
     if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) gcRemovePeer(peerId);
   };
   return pc;
+}
+
+// Montre la video (camera ou ecran partage) ou l'avatar. On ne met JAMAIS la
+// video en `hidden` : ca couperait son son sur pas mal de mobiles. Sans image,
+// l'avatar la recouvre juste visuellement (voir la regle CSS .gc-tile-avatar).
+function gcRefreshTile(entry) {
+  entry.avatarEl.hidden = !!(entry.cameraOn || entry.screenOn);
+  entry.tile.classList.toggle('is-screen', !!entry.screenOn);
 }
 
 function gcFlushCandidates(entry) {
@@ -159,6 +175,12 @@ async function joinGroupCall(groupId, withVideo) {
 
 function leaveGroupCall() {
   if (!gcGroupId) return;
+  if (gcScreenTrack) {
+    gcScreenTrack.onended = null;
+    gcScreenTrack.stop();
+    gcScreenTrack = null;
+  }
+  btnGcToggleScreen.classList.remove('is-sharing');
   socket().emit('group:call:leave', { groupId: gcGroupId });
   gcPeers.forEach((entry) => {
     entry.pc.close();
@@ -197,7 +219,7 @@ btnGcToggleCam.addEventListener('click', () => {
   gcCamEnabled = !gcCamEnabled;
   gcLocalStream.getVideoTracks().forEach((t) => (t.enabled = gcCamEnabled));
   btnGcToggleCam.classList.toggle('is-off', !gcCamEnabled);
-  if (gcLocalTile) {
+  if (gcLocalTile && !gcScreenTrack) {
     gcLocalTile.videoEl.hidden = !gcCamEnabled;
     gcLocalTile.avatarEl.hidden = gcCamEnabled;
   }
@@ -221,7 +243,7 @@ gcMicSelect.addEventListener('change', () => {
 
 gcCamSelect.addEventListener('change', () => {
   if (!gcLocalStream || !gcCamSelect.value) return;
-  const peerConnections = Array.from(gcPeers.values()).map((entry) => entry.pc);
+  const peerConnections = gcScreenTrack ? [] : Array.from(gcPeers.values()).map((entry) => entry.pc);
   switchMediaDevice('video', gcCamSelect.value, gcLocalStream, peerConnections, PREFERRED_CAM_KEY, gcCamEnabled).then(() => {
     if (gcLocalTile) gcLocalTile.videoEl.srcObject = gcLocalStream; // force le rafraichissement de l'aperçu local
   });
@@ -229,10 +251,12 @@ gcCamSelect.addEventListener('change', () => {
 
 // --------------------------- signalisation ---------------------------
 
-async function gcConnectToExisting(peerId, pseudo) {
+async function gcConnectToExisting(peerId, pseudo, cameraOn, screenOn) {
   const { tile, videoEl, avatarEl } = gcCreateTile(peerId, pseudo);
   const pc = gcCreatePeerConnection(peerId);
-  gcPeers.set(peerId, { pc, pseudo, tile, videoEl, avatarEl, pendingCandidates: [] });
+  const newEntry = { pc, pseudo, tile, videoEl, avatarEl, pendingCandidates: [], cameraOn: !!cameraOn, screenOn: !!screenOn };
+  gcPeers.set(peerId, newEntry);
+  gcRefreshTile(newEntry);
   gcStatusEl.textContent = gcPeers.size + 1 + ' participants';
   try {
     const offer = await pc.createOffer();
@@ -246,16 +270,27 @@ async function gcConnectToExisting(peerId, pseudo) {
 RBC.onSocketReady(function (socketInstance) {
   socketInstance.on('group:call:joined', ({ groupId, participants }) => {
     if (groupId !== gcGroupId) return;
-    participants.forEach((p) => gcConnectToExisting(p.id, p.pseudo));
+    participants.forEach((p) => gcConnectToExisting(p.id, p.pseudo, p.video, p.screen));
   });
 
-  socketInstance.on('group:call:peer-joined', ({ groupId, fromId, fromPseudo }) => {
+  socketInstance.on('group:call:peer-joined', ({ groupId, fromId, fromPseudo, video }) => {
     if (groupId !== gcGroupId || gcPeers.has(fromId)) return;
     // quelqu'un rejoint : on prepare une connexion et on attend son offre
     const { tile, videoEl, avatarEl } = gcCreateTile(fromId, fromPseudo);
     const pc = gcCreatePeerConnection(fromId);
-    gcPeers.set(fromId, { pc, pseudo: fromPseudo, tile, videoEl, avatarEl, pendingCandidates: [] });
+    const newEntry = { pc, pseudo: fromPseudo, tile, videoEl, avatarEl, pendingCandidates: [], cameraOn: !!video, screenOn: false };
+    gcPeers.set(fromId, newEntry);
+    gcRefreshTile(newEntry);
     gcStatusEl.textContent = gcPeers.size + 1 + ' participants';
+  });
+
+  socketInstance.on('group:call:screen', ({ groupId, fromId, on }) => {
+    if (groupId !== gcGroupId) return;
+    const entry = gcPeers.get(fromId);
+    if (!entry) return;
+    entry.screenOn = !!on;
+    gcRefreshTile(entry);
+    if (on) attemptAutoplay(entry.videoEl, gcOverlayEl);
   });
 
   socketInstance.on('group:call:peer-left', ({ groupId, fromId }) => {
@@ -313,4 +348,63 @@ RBC.onSocketReady(function (socketInstance) {
   socketInstance.on('disconnect', () => {
     if (gcGroupId) leaveGroupCall();
   });
+});
+
+// --------------------------- partage d'ecran (appel de groupe) ---------------------------
+// Meme principe que l'appel 1-a-1 (voir call.js) : la piste "ecran" est donnee
+// a CHAQUE connexion ouverte (maillage), puis la camera revient a l'arret.
+
+async function gcStartScreenShare() {
+  if (!gcGroupId || !gcLocalStream || gcScreenTrack) return;
+  const track = await captureScreenTrack(); // defini dans call.js
+  if (!track) return;
+  if (!gcGroupId) {
+    track.stop(); // on a quitte l'appel pendant le choix de l'ecran
+    return;
+  }
+  for (const entry of gcPeers.values()) {
+    const sender = findVideoSender(entry.pc);
+    if (sender) await sender.replaceTrack(track).catch(() => {});
+  }
+  gcScreenTrack = track;
+  track.onended = () => gcStopScreenShare(); // bouton "Arreter le partage" du navigateur
+  if (gcLocalTile) {
+    gcLocalTile.videoEl.srcObject = new MediaStream([track]);
+    gcLocalTile.videoEl.hidden = false;
+    gcLocalTile.avatarEl.hidden = true;
+    gcLocalTile.tile.classList.add('is-screen');
+  }
+  btnGcToggleScreen.classList.add('is-sharing');
+  socket().emit('group:call:screen', { groupId: gcGroupId, on: true });
+}
+
+async function gcStopScreenShare() {
+  if (!gcScreenTrack) return;
+  const track = gcScreenTrack;
+  gcScreenTrack = null;
+  track.onended = null;
+  track.stop();
+  const cam = gcLocalStream ? gcLocalStream.getVideoTracks()[0] : null;
+  for (const entry of gcPeers.values()) {
+    const sender = findVideoSender(entry.pc);
+    if (sender) await sender.replaceTrack(cam || null).catch(() => {});
+  }
+  if (gcLocalTile && gcLocalStream) {
+    gcLocalTile.videoEl.srcObject = gcLocalStream;
+    gcLocalTile.tile.classList.remove('is-screen');
+    const camOn = !!cam && gcCamEnabled;
+    gcLocalTile.videoEl.hidden = !camOn;
+    gcLocalTile.avatarEl.hidden = camOn;
+  }
+  btnGcToggleScreen.classList.remove('is-sharing');
+  if (gcGroupId) socket().emit('group:call:screen', { groupId: gcGroupId, on: false });
+}
+
+// Pas de partage d'ecran possible sur telephone : on cache le bouton (regarder reste possible).
+if (!screenShareSupported()) {
+  btnGcToggleScreen.hidden = true;
+}
+btnGcToggleScreen.addEventListener('click', () => {
+  if (gcScreenTrack) gcStopScreenShare();
+  else gcStartScreenShare();
 });

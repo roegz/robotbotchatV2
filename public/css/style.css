@@ -1109,3 +1109,23 @@ ul {
 #btn-notifications.is-off .bell-slash { display: inline; }
 #btn-notifications.is-off { opacity: 0.65; }
 .sidebar-header { gap: 4px; }
+
+/* Partage d'ecran */
+.call-control.is-sharing {
+  background: var(--accent);
+  color: #fff;
+}
+.call-video-wrap.is-screen #remote-video {
+  object-fit: contain;
+  background: #000;
+}
+.gc-tile.is-screen {
+  grid-column: 1 / -1;
+  aspect-ratio: 16 / 9;
+  max-height: 70vh;
+  margin: 0 auto;
+  width: 100%;
+}
+.gc-tile.is-screen video {
+  object-fit: contain;
+}

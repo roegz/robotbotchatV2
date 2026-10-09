@@ -629,8 +629,9 @@ io.on('connection', (socket) => {
       id,
       pseudo: info.pseudo,
       video: info.video,
+      screen: !!info.screen,
     }));
-    participants.set(uid, { pseudo: socket.pseudo, video: !!video });
+    participants.set(uid, { pseudo: socket.pseudo, video: !!video, screen: false });
     socket.emit('group:call:joined', { groupId, participants: existing });
     existing.forEach((p) => {
       io.to(p.id).emit('group:call:peer-joined', { groupId, fromId: uid, fromPseudo: socket.pseudo, video: !!video });
@@ -646,6 +647,21 @@ io.on('connection', (socket) => {
     if (participants.size === 0) groupCallParticipants.delete(groupId);
     participants.forEach((info, memberId) => io.to(memberId).emit('group:call:peer-left', { groupId, fromId: uid }));
     broadcastGroupCallStatus(groupId);
+  });
+
+  // --- Partage d'ecran : la video passe par la connexion existante, ces messages
+  // servent juste a prevenir les autres pour qu'ils adaptent l'affichage. ---
+  socket.on('call:screen', ({ to, on } = {}) => {
+    if (typeof to !== 'string') return;
+    io.to(to).emit('call:screen', { fromId: uid, on: !!on });
+  });
+  socket.on('group:call:screen', ({ groupId, on } = {}) => {
+    const participants = groupCallParticipants.get(groupId);
+    if (!participants || !participants.has(uid)) return;
+    participants.get(uid).screen = !!on;
+    participants.forEach((info, memberId) => {
+      if (memberId !== uid) io.to(memberId).emit('group:call:screen', { groupId, fromId: uid, on: !!on });
+    });
   });
 
   socket.on('group:call:offer', ({ groupId, to, sdp } = {}) => {
