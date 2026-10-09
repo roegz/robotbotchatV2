@@ -1129,3 +1129,46 @@ ul {
 .gc-tile.is-screen video {
   object-fit: contain;
 }
+
+/* Photos dans les messages */
+.attach-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+.msg-image {
+  display: block;
+  max-width: min(260px, 100%);
+  max-height: 320px;
+  border-radius: 10px;
+  cursor: zoom-in;
+  margin-bottom: 4px;
+  background: rgba(0, 0, 0, 0.06);
+}
+.image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  cursor: zoom-out;
+}
+.image-viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+.image-viewer-save {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  right: 16px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  text-decoration: none;
+}

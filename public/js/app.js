@@ -251,7 +251,7 @@ function connectSocket() {
       const friend = getFriendById(msg.from);
       RBC.notify.newMessage({
         title: friend ? friend.pseudo : 'Nouveau message',
-        body: msg.content.length > 120 ? msg.content.slice(0, 117) + '...' : msg.content,
+        body: previewOf(msg),
         tag: 'msg-' + msg.from,
         data: { type: 'friend', friendId: msg.from },
         viewingIt: RBC.state.activeFriendId === otherId,
@@ -305,7 +305,7 @@ function connectSocket() {
       const sender = group ? group.members.find((m) => m.id === msg.from) : null;
       RBC.notify.newMessage({
         title: group ? group.name : 'Groupe',
-        body: (sender ? sender.pseudo + ' : ' : '') + (msg.content.length > 120 ? msg.content.slice(0, 117) + '...' : msg.content),
+        body: (sender ? sender.pseudo + ' : ' : '') + (previewOf(msg)),
         tag: 'group-' + msg.groupId,
         data: { type: 'group', groupId: msg.groupId },
         viewingIt: RBC.state.activeGroupId === msg.groupId,
@@ -498,7 +498,7 @@ function appendMessageNode(msg) {
   row.className = 'msg-row ' + (isMine ? 'is-mine' : 'is-theirs');
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble';
-  bubble.textContent = msg.content;
+  fillMessageBubble(bubble, msg);
   const time = document.createElement('span');
   time.className = 'msg-time';
   time.textContent = new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
@@ -526,7 +526,7 @@ function appendGroupMessageNode(msg) {
   }
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble';
-  bubble.textContent = msg.content;
+  fillMessageBubble(bubble, msg);
   const time = document.createElement('span');
   time.className = 'msg-time';
   time.textContent = new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
@@ -552,7 +552,7 @@ function appendGeneralMessageNode(msg) {
   }
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble';
-  bubble.textContent = msg.content;
+  fillMessageBubble(bubble, msg);
   const time = document.createElement('span');
   time.className = 'msg-time';
   time.textContent = new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
@@ -560,6 +560,149 @@ function appendGeneralMessageNode(msg) {
   container.appendChild(bubble);
   messagesEl.appendChild(row);
 }
+
+// ---------------------------- photos ----------------------------
+
+function previewOf(msg) {
+  const t = msg.content || (msg.image ? 'Photo' : '');
+  return t.length > 120 ? t.slice(0, 117) + '...' : t;
+}
+
+// Remplit une bulle de message : la photo (si il y en a une) puis le texte.
+function fillMessageBubble(bubble, msg) {
+  if (msg.image) {
+    const img = document.createElement('img');
+    img.className = 'msg-image';
+    img.src = msg.image;
+    img.alt = 'Photo';
+    img.addEventListener('click', () => openImageViewer(msg.image));
+    // La photo change la hauteur de la discussion en se chargeant : si on etait
+    // en bas, on y reste.
+    img.addEventListener('load', () => {
+      const dist = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+      if (dist - img.offsetHeight < 120) messagesEl.scrollTop = messagesEl.scrollHeight;
+    });
+    bubble.appendChild(img);
+  }
+  if (msg.content) {
+    const text = document.createElement('div');
+    text.textContent = msg.content;
+    bubble.appendChild(text);
+  }
+}
+
+function openImageViewer(src) {
+  const overlay = document.createElement('div');
+  overlay.className = 'image-viewer';
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = 'Photo';
+  const save = document.createElement('a');
+  save.className = 'image-viewer-save';
+  save.href = src;
+  save.download = 'photo';
+  save.textContent = 'Enregistrer';
+  save.addEventListener('click', (e) => e.stopPropagation());
+  overlay.appendChild(img);
+  overlay.appendChild(save);
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  overlay.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+}
+
+// Reduit la photo avant l'envoi (1280 px max, JPEG) : bien plus rapide sur
+// telephone et ca evite de remplir le serveur. Les GIF animes restent tels quels.
+async function prepareImage(file) {
+  if (file.type === 'image/gif' && file.size <= 5 * 1024 * 1024) return file;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const MAX = 1280;
+    const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; // les PNG transparents deviennent blancs en JPEG
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+    if (!blob) throw new Error('Image illisible.');
+    return blob;
+  } catch (e) {
+    throw new Error("Impossible de lire cette image.");
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function sendPhoto(file) {
+  if (!RBC.state.socket) return;
+  if (!(RBC.state.activeGeneral || RBC.state.activeGroupId || RBC.state.activeFriendId)) return;
+  if (!file || !file.type.startsWith('image/')) {
+    showToast("Ce fichier n'est pas une image.", true);
+    return;
+  }
+  // On retient la discussion de depart : on peut en changer pendant l'envoi.
+  const target = {
+    general: RBC.state.activeGeneral,
+    groupId: RBC.state.activeGroupId,
+    friendId: RBC.state.activeFriendId,
+  };
+  const input = document.getElementById('message-input');
+  const caption = input.value.trim();
+  showToast('Envoi de la photo…');
+  try {
+    const blob = await prepareImage(file);
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type, Authorization: 'Bearer ' + RBC.state.token },
+      body: blob,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data && data.error) || "Impossible d'envoyer la photo.");
+    if (caption) input.value = '';
+    const onAck = (ack) => {
+      if (!ack || !ack.ok) showToast((ack && ack.error) || "Impossible d'envoyer la photo.", true);
+    };
+    const socket = RBC.state.socket;
+    if (target.general) socket.emit('general:message:send', { content: caption, image: data.url }, onAck);
+    else if (target.groupId) socket.emit('group:message:send', { groupId: target.groupId, content: caption, image: data.url }, onAck);
+    else socket.emit('message:send', { to: target.friendId, content: caption, image: data.url }, onAck);
+  } catch (err) {
+    showToast(err.message || "Impossible d'envoyer la photo.", true);
+  }
+}
+
+document.getElementById('btn-attach').addEventListener('click', () => {
+  if (!(RBC.state.activeGeneral || RBC.state.activeGroupId || RBC.state.activeFriendId)) return;
+  document.getElementById('file-photo').click();
+});
+document.getElementById('file-photo').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (file) sendPhoto(file);
+});
+// Coller une image (capture d'ecran, copie) directement dans la zone de texte.
+document.getElementById('message-input').addEventListener('paste', (e) => {
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const item of items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      e.preventDefault();
+      sendPhoto(item.getAsFile());
+      return;
+    }
+  }
+});
 
 document.getElementById('form-message').addEventListener('submit', (e) => {
   e.preventDefault();

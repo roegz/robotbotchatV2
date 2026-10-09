@@ -5,6 +5,7 @@
 // notifications, signalisation des appels video) via Socket.IO.
 
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
@@ -128,6 +129,54 @@ const io = new Server(server, {
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------------------------------------------------------------------------
+// Photos : stockees dans data/uploads, supprimees au bout d'environ 24h comme
+// les messages. (Sur le plan gratuit de Render, ce dossier est aussi remis a
+// zero a chaque redemarrage du serveur.)
+// ---------------------------------------------------------------------------
+
+const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const MAX_UPLOAD_BYTES = 6 * 1024 * 1024;
+const UPLOAD_MAX_AGE_MS = 25 * 60 * 60 * 1000; // un peu plus que la duree de vie des messages (24h)
+
+// Reconnait le vrai type de l'image d'apres ses premiers octets (on ne fait
+// pas confiance a ce que dit le navigateur).
+function sniffImageExt(buf) {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';
+  if (buf.slice(0, 4).toString('latin1') === 'GIF8') return 'gif';
+  if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return null;
+}
+
+// Une photo ne peut etre jointe a un message que si elle existe vraiment ici.
+function validUploadUrl(url) {
+  if (typeof url !== 'string') return null;
+  const m = /^\/uploads\/([a-f0-9-]{36}\.(?:jpg|png|gif|webp))$/.exec(url);
+  if (!m) return null;
+  return fs.existsSync(path.join(UPLOAD_DIR, m[1])) ? url : null;
+}
+
+function previewText(content, image) {
+  const t = content || (image ? 'Photo' : '');
+  return t.length > 120 ? t.slice(0, 117) + '...' : t;
+}
+
+function purgeOldUploads() {
+  fs.readdir(UPLOAD_DIR, (err, files) => {
+    if (err) return;
+    const now = Date.now();
+    files.forEach((f) => {
+      const p = path.join(UPLOAD_DIR, f);
+      fs.stat(p, (e, st) => {
+        if (!e && now - st.mtimeMs > UPLOAD_MAX_AGE_MS) fs.unlink(p, () => {});
+      });
+    });
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -374,6 +423,40 @@ app.get('/api/ice-servers', authRequired, async (req, res) => {
 // API - notifications push
 // ---------------------------------------------------------------------------
 
+const uploadHits = new Map(); // limite : 15 photos par minute et par personne
+app.post(
+  '/api/upload',
+  authRequired,
+  express.raw({ type: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'], limit: MAX_UPLOAD_BYTES }),
+  (req, res) => {
+    const now = Date.now();
+    const hits = (uploadHits.get(req.userId) || []).filter((t) => now - t < 60 * 1000);
+    if (hits.length >= 15) return res.status(429).json({ error: 'Trop de photos envoyees, attends un peu.' });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Image invalide.' });
+    }
+    const ext = sniffImageExt(req.body);
+    if (!ext) return res.status(400).json({ error: 'Format non pris en charge (JPEG, PNG, GIF ou WebP).' });
+    hits.push(now);
+    uploadHits.set(req.userId, hits);
+    const name = crypto.randomUUID() + '.' + ext;
+    fs.writeFile(path.join(UPLOAD_DIR, name), req.body, (err) => {
+      if (err) return res.status(500).json({ error: "Impossible d'enregistrer la photo." });
+      res.json({ url: '/uploads/' + name });
+    });
+  }
+);
+
+// Les noms de fichiers sont des identifiants aleatoires impossibles a deviner.
+app.get('/uploads/:name', (req, res) => {
+  if (!/^[a-f0-9-]{36}\.(jpg|png|gif|webp)$/.test(req.params.name)) return res.status(404).end();
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Cache-Control', 'private, max-age=86400');
+  res.sendFile(path.join(UPLOAD_DIR, req.params.name), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
+
 app.get('/api/push/public-key', authRequired, (req, res) => {
   res.json({ publicKey: PUSH_ENABLED ? VAPID_PUBLIC_KEY : null });
 });
@@ -461,7 +544,8 @@ io.on('connection', (socket) => {
       const to = payload && payload.to;
       let content = payload && payload.content;
       content = typeof content === 'string' ? content.trim() : '';
-      if (!to || !content || content.length > 2000) {
+      const image = validUploadUrl(payload && payload.image);
+      if (!to || (!content && !image) || content.length > 2000) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Message vide ou invalide.' });
         return;
       }
@@ -469,12 +553,12 @@ io.on('connection', (socket) => {
         if (typeof ack === 'function') ack({ ok: false, error: "Vous n'etes pas amis." });
         return;
       }
-      const msg = db.saveMessage(uid, to, content);
+      const msg = db.saveMessage(uid, to, content, image);
       io.to(to).emit('message:new', msg);
       io.to(uid).emit('message:new', msg); // pour resynchroniser les autres onglets de l'expediteur
       sendPushToUser(to, {
         title: socket.pseudo,
-        body: content.length > 120 ? content.slice(0, 117) + '...' : content,
+        body: previewText(content, image),
         tag: 'msg-' + uid,
         data: { type: 'friend', friendId: uid },
       });
@@ -490,7 +574,8 @@ io.on('connection', (socket) => {
       const groupId = payload && payload.groupId;
       let content = payload && payload.content;
       content = typeof content === 'string' ? content.trim() : '';
-      if (!groupId || !content || content.length > 2000) {
+      const image = validUploadUrl(payload && payload.image);
+      if (!groupId || (!content && !image) || content.length > 2000) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Message vide ou invalide.' });
         return;
       }
@@ -498,14 +583,14 @@ io.on('connection', (socket) => {
         if (typeof ack === 'function') ack({ ok: false, error: "Tu n'es pas membre de ce groupe." });
         return;
       }
-      const msg = db.saveGroupMessage(groupId, uid, content);
+      const msg = db.saveGroupMessage(groupId, uid, content, image);
       const group = db.getGroupById(groupId);
       group.members.forEach((memberId) => {
         io.to(memberId).emit('group:message:new', msg);
         if (memberId !== uid) {
           sendPushToUser(memberId, {
             title: group.name,
-            body: socket.pseudo + ' : ' + (content.length > 120 ? content.slice(0, 117) + '...' : content),
+            body: socket.pseudo + ' : ' + previewText(content, image),
             tag: 'group-' + groupId,
             data: { type: 'group', groupId },
           });
@@ -522,11 +607,12 @@ io.on('connection', (socket) => {
     try {
       let content = payload && payload.content;
       content = typeof content === 'string' ? content.trim() : '';
-      if (!content || content.length > 2000) {
+      const image = validUploadUrl(payload && payload.image);
+      if ((!content && !image) || content.length > 2000) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Message vide ou invalide.' });
         return;
       }
-      const msg = db.saveGeneralMessage(uid, socket.pseudo, content);
+      const msg = db.saveGeneralMessage(uid, socket.pseudo, content, image);
       io.to('general').emit('general:message:new', msg);
       if (typeof ack === 'function') ack({ ok: true, message: msg });
     } catch (e) {
@@ -708,7 +794,9 @@ server.listen(PORT, () => {
 db.purgeOldMessages();
 db.purgeOldGroupMessages();
 db.purgeOldGeneralMessages();
+purgeOldUploads();
 setInterval(() => {
+  purgeOldUploads();
   db.purgeOldMessages();
   db.purgeOldGroupMessages();
   db.purgeOldGeneralMessages();

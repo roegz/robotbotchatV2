@@ -166,8 +166,9 @@ function purgeOldMessages() {
   if (db.messages.length !== before) persist();
 }
 
-function saveMessage(fromId, toId, content) {
+function saveMessage(fromId, toId, content, image) {
   const msg = { id: uuidv4(), from: fromId, to: toId, content, createdAt: Date.now() };
+  if (image) msg.image = image;
   db.messages.push(msg);
   persist();
   return msg;
@@ -237,8 +238,9 @@ function purgeOldGroupMessages() {
   if (db.groupMessages.length !== before) persist();
 }
 
-function saveGroupMessage(groupId, fromId, content) {
+function saveGroupMessage(groupId, fromId, content, image) {
   const msg = { id: uuidv4(), groupId, from: fromId, content, createdAt: Date.now() };
+  if (image) msg.image = image;
   db.groupMessages.push(msg);
   persist();
   return msg;
@@ -253,8 +255,9 @@ function getGroupConversation(groupId, limit = 300) {
 
 // ---------- Salon "Général" (ouvert à tous les comptes, sans lien d'amitié) ----------
 
-function saveGeneralMessage(fromId, fromPseudo, content) {
+function saveGeneralMessage(fromId, fromPseudo, content, image) {
   const msg = { id: uuidv4(), from: fromId, fromPseudo, content, createdAt: Date.now() };
+  if (image) msg.image = image;
   db.generalMessages.push(msg);
   persist();
   return msg;

@@ -165,6 +165,10 @@
       <div id="messages" class="messages"></div>
 
       <form id="form-message" class="message-form">
+        <button type="button" id="btn-attach" class="icon-btn attach-btn" aria-label="Envoyer une photo" title="Envoyer une photo">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        </button>
+        <input type="file" id="file-photo" accept="image/*" hidden />
         <input type="text" id="message-input" maxlength="2000" autocomplete="off" placeholder="Écris un message…" />
         <button type="submit" class="btn btn-primary send-btn" aria-label="Envoyer">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
