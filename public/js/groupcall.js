@@ -159,6 +159,7 @@ async function joinGroupCall(groupId, withVideo) {
   gcStatusEl.textContent = '1 participant';
   gcGridEl.innerHTML = '';
   gcOverlayEl.hidden = false;
+  acquireWakeLock(); // defini dans call.js : garde l'ecran allume pendant l'appel
 
   const { tile, videoEl, avatarEl } = gcCreateTile('me', (RBC.state.me.pseudo || '') + ' (toi)');
   videoEl.muted = true;
@@ -175,6 +176,7 @@ async function joinGroupCall(groupId, withVideo) {
 
 function leaveGroupCall() {
   if (!gcGroupId) return;
+  releaseWakeLock();
   if (gcScreenTrack) {
     gcScreenTrack.onended = null;
     gcScreenTrack.stop();
@@ -407,4 +409,20 @@ if (!screenShareSupported()) {
 btnGcToggleScreen.addEventListener('click', () => {
   if (gcScreenTrack) gcStopScreenShare();
   else gcStartScreenShare();
+});
+
+// --------------------------- garde-fous pendant l'appel (voir call.js) ---------------------------
+
+async function gcKeeperTick() {
+  if (!gcGroupId || !gcLocalStream) return;
+  const pcs = Array.from(gcPeers.values()).map((entry) => entry.pc);
+  if (await recoverMicIfNeeded(gcLocalStream, pcs, gcMicEnabled)) RBC.showToast('Micro relancé automatiquement.');
+  gcPeers.forEach((entry) => keepRemotePlaying(entry.videoEl));
+}
+setInterval(gcKeeperTick, 2500);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (gcGroupId) acquireWakeLock();
+  gcKeeperTick();
 });

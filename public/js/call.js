@@ -222,9 +222,25 @@ function createPeerConnection(peerId) {
     callActiveStatus.textContent = 'en cours';
   };
 
+  let disconnectTimer = null;
   conn.onconnectionstatechange = () => {
-    if (['failed', 'disconnected', 'closed'].includes(conn.connectionState) && currentCallPeerId) {
-      if (conn.connectionState === 'failed') {
+    const state = conn.connectionState;
+    if (state === 'connected') {
+      clearTimeout(disconnectTimer);
+      return;
+    }
+    if (state === 'disconnected') {
+      // Micro-coupure du reseau (wifi -> 4G, tunnel...) : souvent ca revient tout
+      // seul en quelques secondes, donc on laisse 8 s avant de raccrocher.
+      clearTimeout(disconnectTimer);
+      disconnectTimer = setTimeout(() => {
+        if (pc === conn && conn.connectionState === 'disconnected' && currentCallPeerId) endCall(true);
+      }, 8000);
+      return;
+    }
+    if (['failed', 'closed'].includes(state) && currentCallPeerId && pc === conn) {
+      clearTimeout(disconnectTimer);
+      if (state === 'failed') {
         RBC.showToast('La connexion vidéo a échoué (réseau trop restrictif).', true);
       }
       endCall(true);
@@ -251,6 +267,7 @@ function openCallOverlay(peerPseudo, statusText, withVideo) {
   btnToggleScreen.classList.remove('is-sharing');
   remoteScreenOn = false;
   callVideoWrapEl.classList.remove('is-screen');
+  acquireWakeLock();
 
   callCamSelectWrap.hidden = !withVideo;
   populateDeviceSelects(callMicSelect, withVideo ? callCamSelect : null, localStream);
@@ -419,6 +436,7 @@ function handleIceCandidate({ fromId, candidate }) {
 
 function endCall(silent) {
   const peerId = currentCallPeerId;
+  releaseWakeLock();
   if (screenTrack) {
     screenTrack.onended = null;
     screenTrack.stop();
@@ -607,4 +625,96 @@ if (!screenShareSupported()) {
 btnToggleScreen.addEventListener('click', () => {
   if (screenTrack) stopScreenShare();
   else startScreenShare();
+});
+
+// --------------------------- garde-fous pendant l'appel ---------------------------
+// Probleme classique : "au debut on s'entend, puis l'un des deux n'entend plus
+// l'autre". Causes les plus frequentes, corrigees ici :
+//  1. Le micro s'arrete tout seul (ecran du telephone qui se verrouille, appli
+//     mise en arriere-plan, autre appli qui prend le micro) : on garde l'ecran
+//     allume pendant l'appel et on relance le micro automatiquement s'il s'arrete.
+//  2. Le navigateur met en pause le son recu : on le remet en lecture.
+// Ces fonctions sont aussi utilisees par groupcall.js.
+
+let wakeLock = null;
+
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => {
+        wakeLock = null;
+      });
+    }
+  } catch (e) {
+    // pas grave : certains appareils/navigateurs ne le permettent pas
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+
+let micRecovering = false;
+let lastMicRecoverAt = 0;
+
+// Si la piste micro est coupee (terminee), en reprend une nouvelle et la
+// redonne a toutes les connexions de l'appel. Renvoie true si le micro a ete relance.
+async function recoverMicIfNeeded(stream, peerConnections, enabled) {
+  if (!stream || micRecovering) return false;
+  const current = stream.getAudioTracks()[0];
+  if (current && current.readyState === 'live') return false;
+  if (Date.now() - lastMicRecoverAt < 4000) return false;
+  lastMicRecoverAt = Date.now();
+  micRecovering = true;
+  try {
+    const micId = getPreferredDeviceId(PREFERRED_MIC_KEY);
+    let fresh;
+    try {
+      fresh = await navigator.mediaDevices.getUserMedia({ audio: micId ? { deviceId: { exact: micId } } : true });
+    } catch (e) {
+      fresh = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    const newTrack = fresh.getAudioTracks()[0];
+    if (!newTrack) return false;
+    stream.getAudioTracks().forEach((t) => {
+      stream.removeTrack(t);
+      t.stop();
+    });
+    stream.addTrack(newTrack);
+    newTrack.enabled = enabled !== false; // si on avait coupe le micro a la main, ca reste coupe
+    peerConnections.forEach((peerConnection) => {
+      const tr = peerConnection
+        .getTransceivers()
+        .find((x) => x.receiver && x.receiver.track && x.receiver.track.kind === 'audio');
+      if (tr) tr.sender.replaceTrack(newTrack).catch(() => {});
+    });
+    return true;
+  } catch (e) {
+    return false; // on reessaiera au prochain passage
+  } finally {
+    micRecovering = false;
+  }
+}
+
+// Remet en lecture un element qui joue le son de l'autre s'il a ete mis en pause.
+function keepRemotePlaying(mediaEl) {
+  if (mediaEl && mediaEl.srcObject && mediaEl.paused) mediaEl.play().catch(() => {});
+}
+
+async function callKeeperTick() {
+  if (!pc || !localStream || !currentCallPeerId) return;
+  if (await recoverMicIfNeeded(localStream, [pc], micEnabled)) RBC.showToast('Micro relancé automatiquement.');
+  keepRemotePlaying(remoteVideoEl);
+}
+setInterval(callKeeperTick, 2500);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  // On revient sur l'appli : l'ecran peut s'etre verrouille entre-temps.
+  if (currentCallPeerId) acquireWakeLock();
+  callKeeperTick();
 });
