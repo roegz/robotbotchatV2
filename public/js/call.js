@@ -219,6 +219,7 @@ function createPeerConnection(peerId) {
     if (!event.streams[0]) return;
     remoteVideoEl.srcObject = event.streams[0];
     attemptAutoplay(remoteVideoEl, callActiveEl);
+    tryPlay(remoteVideoEl, callSoundBtn);
     callActiveStatus.textContent = 'en cours';
   };
 
@@ -708,7 +709,7 @@ function keepRemotePlaying(mediaEl) {
 async function callKeeperTick() {
   if (!pc || !localStream || !currentCallPeerId) return;
   if (await recoverMicIfNeeded(localStream, [pc], micEnabled)) RBC.showToast('Micro relancé automatiquement.');
-  keepRemotePlaying(remoteVideoEl);
+  tryPlay(remoteVideoEl, callSoundBtn);
 }
 setInterval(callKeeperTick, 2500);
 
@@ -717,4 +718,58 @@ document.addEventListener('visibilitychange', () => {
   // On revient sur l'appli : l'ecran peut s'etre verrouille entre-temps.
   if (currentCallPeerId) acquireWakeLock();
   callKeeperTick();
+});
+
+// --------------------------- "Son coupe" : reactiver le son d'un clic ---------------------------
+// Certains navigateurs / applis installees bloquent le son de l'autre tant
+// qu'on n'a pas touche l'ecran (alors que ca marche dans un navigateur normal).
+// Quand ca arrive, un bandeau apparait ; un clic dessus (ou n'importe ou sur
+// l'ecran d'appel) remet le son. Utilise aussi par groupcall.js.
+
+const callSoundBtn = document.getElementById('btn-enable-sound');
+
+// Essaie de lancer la lecture. Renvoie true si le son joue, false s'il est bloque.
+// Affiche/cache le bandeau passe en parametre selon le resultat.
+function tryPlay(mediaEl, bannerEl) {
+  if (!mediaEl || !mediaEl.srcObject) return Promise.resolve(true);
+  mediaEl.muted = false;
+  mediaEl.volume = 1;
+  return mediaEl
+    .play()
+    .then(() => {
+      if (bannerEl) bannerEl.hidden = true;
+      return true;
+    })
+    .catch(() => {
+      if (bannerEl) bannerEl.hidden = false;
+      return false;
+    });
+}
+
+// Un geste de l'utilisateur debloque aussi le moteur audio du navigateur (Safari surtout).
+function unlockAudioEngine() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    ctx.resume().catch(() => {});
+    const src = ctx.createBufferSource();
+    src.buffer = ctx.createBuffer(1, 1, 22050);
+    src.connect(ctx.destination);
+    src.start(0);
+    setTimeout(() => ctx.close().catch(() => {}), 600);
+  } catch (e) {
+    // pas grave
+  }
+}
+
+callSoundBtn.addEventListener('click', async () => {
+  unlockAudioEngine();
+  const ok = await tryPlay(remoteVideoEl, callSoundBtn);
+  if (!ok) RBC.showToast("Impossible d'activer le son : vérifie le volume et la sortie audio de l'appareil.", true);
+});
+// Taper n'importe ou sur l'ecran d'appel tente aussi de remettre le son.
+callActiveEl.addEventListener('click', () => {
+  unlockAudioEngine();
+  tryPlay(remoteVideoEl, callSoundBtn);
 });

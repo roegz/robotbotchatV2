@@ -92,6 +92,7 @@ function gcCreatePeerConnection(peerId) {
     if (!entry || !e.streams[0]) return;
     entry.videoEl.srcObject = e.streams[0];
     attemptAutoplay(entry.videoEl, gcOverlayEl); // defini dans call.js
+    gcPlayAll();
     gcRefreshTile(entry);
   };
   pc.onconnectionstatechange = () => {
@@ -417,7 +418,7 @@ async function gcKeeperTick() {
   if (!gcGroupId || !gcLocalStream) return;
   const pcs = Array.from(gcPeers.values()).map((entry) => entry.pc);
   if (await recoverMicIfNeeded(gcLocalStream, pcs, gcMicEnabled)) RBC.showToast('Micro relancé automatiquement.');
-  gcPeers.forEach((entry) => keepRemotePlaying(entry.videoEl));
+  gcPlayAll();
 }
 setInterval(gcKeeperTick, 2500);
 
@@ -425,4 +426,29 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (gcGroupId) acquireWakeLock();
   gcKeeperTick();
+});
+
+// --------------------------- "Son coupe" (appel de groupe, voir call.js) ---------------------------
+
+const gcSoundBtn = document.getElementById('btn-gc-enable-sound');
+
+// Relance le son de tous les participants ; le bandeau reste affiche si au moins un est bloque.
+async function gcPlayAll() {
+  let blocked = false;
+  for (const entry of gcPeers.values()) {
+    if (!(await tryPlay(entry.videoEl, null))) blocked = true;
+  }
+  gcSoundBtn.hidden = !blocked;
+}
+
+gcSoundBtn.addEventListener('click', async () => {
+  unlockAudioEngine(); // defini dans call.js
+  await gcPlayAll();
+  if (!gcSoundBtn.hidden) {
+    RBC.showToast("Impossible d'activer le son : vérifie le volume et la sortie audio de l'appareil.", true);
+  }
+});
+gcOverlayEl.addEventListener('click', () => {
+  unlockAudioEngine();
+  gcPlayAll();
 });
