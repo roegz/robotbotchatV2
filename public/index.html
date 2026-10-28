@@ -19,8 +19,23 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="/css/animations.css" />
 </head>
 <body>
+
+<!-- Ecran de demarrage anime (logo) : voir css/animations.css et js/anim.js -->
+<div id="splash" class="splash" aria-hidden="true">
+  <svg class="splash-logo" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path class="logo-back" pathLength="1" d="M6 14c0-2.76 2.24-5 5-5h15c2.76 0 5 2.24 5 5v9c0 2.76-2.24 5-5 5H16.8L9 34.5V27.6c-1.8-.7-3-2.45-3-4.6z"/>
+    <path class="logo-front" pathLength="1" d="M18 21c0-2.76 2.24-5 5-5h14c2.76 0 5 2.24 5 5v8c0 2.76-2.24 5-5 5v6l-7-6h-7c-2.76 0-5-2.24-5-5z"/>
+    <circle class="logo-dot" cx="25" cy="25" r="1.7"/>
+    <circle class="logo-dot" cx="30" cy="25" r="1.7"/>
+    <circle class="logo-dot" cx="35" cy="25" r="1.7"/>
+  </svg>
+  <div class="splash-word"><span style="--i:0">r</span><span style="--i:1">o</span><span style="--i:2">b</span><span style="--i:3">o</span><span style="--i:4">t</span><span style="--i:5">b</span><span style="--i:6">o</span><span style="--i:7">t</span><span style="--i:8">c</span><span style="--i:9">h</span><span style="--i:10">a</span><span style="--i:11">t</span><span class="v2" style="--i:12">V2</span></div>
+  <p class="splash-tagline">Discute et appelle tes amis, simplement.</p>
+</div>
+
 
 <!-- ===================== ECRAN CONNEXION / INSCRIPTION ===================== -->
 <div id="auth-screen" class="auth-screen">
@@ -391,6 +406,7 @@
 <script src="/socket.io/socket.io.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/notify.js"></script>
+<script src="/js/anim.js"></script>
 <script src="/js/call.js"></script>
 <script src="/js/game.js"></script>
 <script src="/js/groupcall.js"></script>

@@ -1,0 +1,511 @@
+/* =====================================================================
+   animations.css
+   Toutes les animations du site au meme endroit (pour s'y retrouver).
+   Chargee APRES style.css : elle complete les styles, sans les remplacer.
+   Sections : 1. Ecran de demarrage (logo)   2. Entrees d'ecrans
+              3. Messages   4. Boutons / listes   5. Fenetres, bannieres
+              6. Appels   7. Jeux   8. Admin   9. Mouvement reduit
+   ===================================================================== */
+
+:root {
+  --ease-out: cubic-bezier(0.22, 0.9, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-22px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(22px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes float-soft {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+/* ---------------------------------------------------------------------
+   1. Ecran de demarrage : le logo se dessine, les points "ecrivent",
+      le nom apparait lettre par lettre, puis tout s'efface.
+      (100 % CSS : meme si le JavaScript plante, l'ecran disparait seul.)
+   --------------------------------------------------------------------- */
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  overflow: hidden;
+  animation: splash-out 0.55s ease 2.1s forwards;
+}
+.splash > * {
+  position: relative;
+  z-index: 1;
+}
+.splash::before,
+.splash::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.75;
+  z-index: 0;
+}
+.splash::before {
+  width: 320px;
+  height: 320px;
+  background: var(--accent-soft);
+  top: -90px;
+  left: -90px;
+  animation: blob-drift 5s ease-in-out infinite alternate;
+}
+.splash::after {
+  width: 280px;
+  height: 280px;
+  background: var(--gold-soft);
+  bottom: -80px;
+  right: -70px;
+  animation: blob-drift 6s ease-in-out infinite alternate-reverse;
+}
+@keyframes blob-drift {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(40px, 30px) scale(1.15); }
+}
+@keyframes splash-out {
+  to { opacity: 0; visibility: hidden; transform: scale(1.04); }
+}
+/* Un clic/toucher sur l'ecran de demarrage le ferme tout de suite. */
+.splash.is-skipped {
+  animation: splash-skip 0.3s ease forwards;
+}
+@keyframes splash-skip {
+  to { opacity: 0; visibility: hidden; }
+}
+
+.splash-logo {
+  width: 118px;
+  height: 118px;
+  overflow: visible;
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: logo-pop 0.6s var(--ease-spring) 1.05s both;
+}
+@keyframes logo-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.12) rotate(-3deg); }
+  100% { transform: scale(1); }
+}
+.logo-back,
+.logo-front {
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+.logo-back {
+  stroke: var(--accent);
+  fill: none;
+  animation: logo-draw 0.9s var(--ease-out) 0.1s forwards;
+}
+.logo-front {
+  stroke: var(--gold);
+  fill: var(--bg);
+  fill-opacity: 0;
+  animation: logo-draw 0.9s var(--ease-out) 0.4s forwards, logo-fill 0.3s ease 1s forwards;
+}
+@keyframes logo-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes logo-fill {
+  to { fill-opacity: 1; }
+}
+.logo-dot {
+  fill: var(--gold);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: dot-in 0.25s ease 1.15s forwards, dot-bounce 0.8s ease-in-out 1.4s infinite;
+}
+.logo-dot:nth-of-type(2) { animation-delay: 1.25s, 1.55s; }
+.logo-dot:nth-of-type(3) { animation-delay: 1.35s, 1.7s; }
+@keyframes dot-in {
+  to { opacity: 1; }
+}
+@keyframes dot-bounce {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-3px); }
+}
+
+.splash-word {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 34px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  display: flex;
+}
+.splash-word span {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(16px);
+  animation: letter-in 0.5s var(--ease-out) calc(0.8s + var(--i) * 0.05s) forwards;
+}
+.splash-word .v2 {
+  color: var(--gold);
+}
+@keyframes letter-in {
+  to { opacity: 1; transform: none; }
+}
+.splash-tagline {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14.5px;
+  opacity: 0;
+  animation: fade-up 0.6s ease 1.5s forwards;
+}
+
+/* ---------------------------------------------------------------------
+   2. Entrees d'ecrans
+   --------------------------------------------------------------------- */
+
+.auth-card {
+  animation: fade-up 0.6s var(--ease-out) both;
+}
+/* au premier lancement, la carte attend que l'ecran de demarrage s'efface */
+html:not(.splash-done) .auth-card {
+  animation-delay: 1.9s;
+}
+.auth-form {
+  animation: fade-up 0.35s var(--ease-out) both;
+}
+.auth-screen .brand-icon {
+  animation: float-soft 4s ease-in-out infinite;
+}
+.auth-tab {
+  transition: color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.auth-error:not(:empty) {
+  animation: shake 0.4s ease;
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+
+.app-screen {
+  animation: fade-in 0.5s ease both;
+}
+.sidebar {
+  animation: slide-in-left 0.55s var(--ease-out) both;
+}
+.chat-panel {
+  animation: slide-in-right 0.55s var(--ease-out) both;
+}
+.chat-active {
+  animation: fade-in 0.25s ease both;
+}
+.chat-empty p {
+  animation: fade-up 0.8s var(--ease-out) 0.15s both;
+}
+.chat-empty::before {
+  content: "";
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 14px;
+  border-radius: 50% 50% 50% 12px;
+  background: var(--accent-soft);
+  border: 2px solid var(--accent);
+  animation: float-soft 3.5s ease-in-out infinite;
+}
+
+/* ---------------------------------------------------------------------
+   3. Messages
+   --------------------------------------------------------------------- */
+
+.msg-row.is-mine {
+  transform-origin: right bottom;
+  animation: msg-in-mine 0.32s var(--ease-out) both;
+}
+.msg-row.is-theirs {
+  transform-origin: left bottom;
+  animation: msg-in-theirs 0.32s var(--ease-out) both;
+}
+@keyframes msg-in-mine {
+  from { opacity: 0; transform: translateX(16px) scale(0.95); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes msg-in-theirs {
+  from { opacity: 0; transform: translateX(-16px) scale(0.95); }
+  to { opacity: 1; transform: none; }
+}
+.msg-day-divider {
+  animation: fade-in 0.6s ease both;
+}
+.msg-image {
+  animation: fade-in 0.45s ease both;
+  transition: transform 0.2s var(--ease-out);
+}
+.msg-image:hover {
+  transform: scale(1.02);
+}
+.image-viewer {
+  animation: fade-in 0.2s ease both;
+}
+.image-viewer img {
+  animation: pop-in 0.35s var(--ease-spring) both;
+}
+.message-form input {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.send-btn {
+  transition: transform 0.2s var(--ease-spring), background-color 0.15s ease, opacity 0.15s ease;
+}
+.send-btn:hover:not(:disabled) {
+  transform: scale(1.08) rotate(-8deg);
+}
+.send-btn:active:not(:disabled) {
+  transform: scale(0.9);
+}
+
+/* ---------------------------------------------------------------------
+   4. Boutons, listes, pastilles
+   --------------------------------------------------------------------- */
+
+.btn {
+  transition: transform 0.15s var(--ease-out), background-color 0.15s ease, opacity 0.15s ease,
+    box-shadow 0.2s ease;
+}
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
+}
+.icon-btn {
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.2s var(--ease-spring);
+}
+.icon-btn:hover {
+  transform: scale(1.1);
+}
+.icon-btn:active {
+  transform: scale(0.9);
+}
+#btn-notifications:hover svg {
+  transform-origin: 50% 10%;
+  animation: bell-ring 0.7s ease;
+}
+@keyframes bell-ring {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(16deg); }
+  40% { transform: rotate(-14deg); }
+  60% { transform: rotate(9deg); }
+  80% { transform: rotate(-5deg); }
+}
+
+.friend-item,
+.group-item,
+.request-item {
+  transition: background-color 0.2s ease, transform 0.2s var(--ease-out), box-shadow 0.2s ease;
+}
+.friend-item:hover,
+.group-item:hover {
+  transform: translateX(3px);
+}
+.friend-item:active,
+.group-item:active {
+  transform: scale(0.98);
+}
+.friend-item.is-active,
+.group-item.is-active {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.avatar {
+  transition: transform 0.25s var(--ease-spring);
+}
+.friend-item:hover .avatar,
+.group-item:hover .avatar {
+  transform: scale(1.07);
+}
+.avatar .dot {
+  transition: background-color 0.4s ease;
+}
+.avatar .dot.is-online {
+  animation: dot-pulse 2.4s ease-out infinite;
+}
+@keyframes dot-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(76, 154, 106, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(76, 154, 106, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(76, 154, 106, 0); }
+}
+
+/* ---------------------------------------------------------------------
+   5. Fenetres, notifications, bannieres
+   --------------------------------------------------------------------- */
+
+.modal-backdrop {
+  animation: fade-in 0.25s ease both;
+}
+.modal-card {
+  animation: pop-in 0.35s var(--ease-spring) both;
+}
+.toast {
+  animation: toast-spring 0.4s var(--ease-spring) forwards;
+}
+@keyframes toast-spring {
+  from { opacity: 0; transform: translateY(16px) scale(0.95); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------------------------------------------------------------------
+   6. Appels
+   --------------------------------------------------------------------- */
+
+.call-banner {
+  animation: banner-in 0.5s var(--ease-spring) both, banner-ring 1.6s ease-in-out 0.5s infinite;
+}
+@keyframes banner-in {
+  from { opacity: 0; transform: translate(-50%, -40px) scale(0.95); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes banner-ring {
+  0%, 100% { box-shadow: var(--shadow-md), 0 0 0 0 rgba(63, 102, 82, 0.35); }
+  50% { box-shadow: var(--shadow-md), 0 0 0 10px rgba(63, 102, 82, 0); }
+}
+.call-banner .btn-primary {
+  animation: soft-pulse 1.4s ease-in-out infinite;
+}
+@keyframes soft-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+.call-active {
+  animation: fade-in 0.35s ease both;
+}
+.call-controls .call-control {
+  /* "backwards" et pas "both" : une fois l'entree finie, l'effet au survol reste possible */
+  animation: pop-in 0.45s var(--ease-spring) backwards;
+}
+.call-controls .call-control:nth-child(1) { animation-delay: 0.05s; }
+.call-controls .call-control:nth-child(2) { animation-delay: 0.1s; }
+.call-controls .call-control:nth-child(3) { animation-delay: 0.15s; }
+.call-controls .call-control:nth-child(4) { animation-delay: 0.2s; }
+.call-controls .call-control:nth-child(5) { animation-delay: 0.25s; }
+.call-audio-avatar-circle {
+  animation: halo 2.6s ease-out infinite;
+}
+@keyframes halo {
+  0% { box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.08), 0 0 0 6px rgba(255, 255, 255, 0.18); }
+  100% { box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.08), 0 0 0 30px rgba(255, 255, 255, 0); }
+}
+.gc-tile {
+  animation: pop-in 0.45s var(--ease-spring) both;
+}
+.device-panel {
+  transform-origin: bottom right;
+  animation: pop-in 0.25s ease both;
+}
+.sound-banner {
+  animation: sound-in 0.45s var(--ease-spring) both, glow-gold 1.6s ease-in-out 0.5s infinite;
+}
+@keyframes sound-in {
+  from { opacity: 0; transform: translate(-50%, -14px) scale(0.9); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes glow-gold {
+  0%, 100% { box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 0 0 0 rgba(192, 138, 46, 0.55); }
+  50% { box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 0 0 10px rgba(192, 138, 46, 0); }
+}
+.call-control {
+  transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s var(--ease-spring);
+}
+
+/* ---------------------------------------------------------------------
+   7. Jeux
+   --------------------------------------------------------------------- */
+
+.game-overlay {
+  animation: fade-in 0.3s ease both;
+}
+.solo-overlay-message {
+  animation: pop-in 0.4s var(--ease-spring) both;
+}
+
+/* ---------------------------------------------------------------------
+   8. Panel admin
+   --------------------------------------------------------------------- */
+
+.stat-box {
+  animation: pop-in 0.5s var(--ease-spring) both;
+}
+.stat-box:nth-child(2) { animation-delay: 0.06s; }
+.stat-box:nth-child(3) { animation-delay: 0.12s; }
+.stat-box:nth-child(4) { animation-delay: 0.18s; }
+.stat-box:nth-child(5) { animation-delay: 0.24s; }
+.stat-box:nth-child(6) { animation-delay: 0.3s; }
+
+/* ---------------------------------------------------------------------
+   9. Mouvement reduit : pour les personnes qui ont demande moins
+      d'animations dans leur appareil, on garde l'essentiel sans bouger.
+   --------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .splash {
+    animation: splash-out 0.3s ease 0.5s forwards;
+  }
+  .splash::before,
+  .splash::after,
+  .splash-logo,
+  .logo-dot,
+  .auth-screen .brand-icon,
+  .chat-empty::before,
+  .avatar .dot.is-online,
+  .call-banner,
+  .call-banner .btn-primary,
+  .call-audio-avatar-circle,
+  .sound-banner {
+    animation: none !important;
+  }
+  .logo-back,
+  .logo-front {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .logo-front {
+    fill-opacity: 1;
+  }
+  .logo-dot {
+    opacity: 1;
+  }
+  .splash-word span,
+  .splash-tagline {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  html:not(.splash-done) .auth-card {
+    animation-delay: 0.5s;
+  }
+}
