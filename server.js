@@ -221,6 +221,25 @@ function adminRequired(req, res, next) {
 
 // qui est en ligne : userId -> Set(socket.id)  (Set pour gerer plusieurs onglets/appareils)
 const onlineUsers = new Map();
+// Appels 1-a-1 en cours ou qui sonnent : userId -> Set des personnes avec qui il est en appel.
+// Sert a prevenir l'autre si quelqu'un disparait (appli fermee, plus de reseau) en pleine
+// sonnerie ou en plein appel, pour que sa banniere / son ecran d'appel ne reste pas bloque.
+const callLinks = new Map();
+function linkCall(a, b) {
+  [[a, b], [b, a]].forEach(([x, y]) => {
+    if (!callLinks.has(x)) callLinks.set(x, new Set());
+    callLinks.get(x).add(y);
+  });
+}
+function unlinkCall(a, b) {
+  [[a, b], [b, a]].forEach(([x, y]) => {
+    const set = callLinks.get(x);
+    if (!set) return;
+    set.delete(y);
+    if (set.size === 0) callLinks.delete(x);
+  });
+}
+
 function isOnline(userId) {
   return onlineUsers.has(userId) && onlineUsers.get(userId).size > 0;
 }
@@ -625,6 +644,7 @@ io.on('connection', (socket) => {
   // traitement audio/video se fait directement entre les deux navigateurs.
   socket.on('call:invite', ({ to, video } = {}) => {
     if (!to || !db.areFriends(uid, to)) return;
+    linkCall(uid, to);
     io.to(to).emit('call:incoming', { fromId: uid, fromPseudo: socket.pseudo, video: !!video });
     sendPushToUser(to, {
       title: 'Appel entrant',
@@ -637,13 +657,18 @@ io.on('connection', (socket) => {
   socket.on('call:accept', ({ to } = {}) => {
     if (!to) return;
     io.to(to).emit('call:accepted', { fromId: uid });
+    // si la personne a l'appli ET le navigateur ouverts, l'autre appareil arrete de sonner
+    socket.to(uid).emit('call:handled-elsewhere', { fromId: to });
   });
   socket.on('call:reject', ({ to } = {}) => {
     if (!to) return;
+    unlinkCall(uid, to);
     io.to(to).emit('call:rejected', { fromId: uid });
+    socket.to(uid).emit('call:handled-elsewhere', { fromId: to });
   });
   socket.on('call:cancel', ({ to } = {}) => {
     if (!to) return;
+    unlinkCall(uid, to);
     io.to(to).emit('call:cancelled', { fromId: uid });
   });
   socket.on('call:offer', ({ to, sdp } = {}) => {
@@ -660,6 +685,7 @@ io.on('connection', (socket) => {
   });
   socket.on('call:end', ({ to } = {}) => {
     if (!to) return;
+    unlinkCall(uid, to);
     io.to(to).emit('call:end', { fromId: uid });
   });
 
@@ -770,6 +796,11 @@ io.on('connection', (socket) => {
       if (set.size === 0) {
         onlineUsers.delete(uid);
         db.getFriends(uid).forEach((f) => io.to(f.id).emit('presence:update', { userId: uid, online: false }));
+        // plus aucun appareil connecte : on coupe ses appels 1-a-1 en cours pour l'autre personne
+        Array.from(callLinks.get(uid) || []).forEach((peerId) => {
+          unlinkCall(uid, peerId);
+          io.to(peerId).emit('call:end', { fromId: uid });
+        });
       }
     }
     // si la personne etait dans un appel de groupe, on previent les autres participants

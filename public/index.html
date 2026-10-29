@@ -275,12 +275,14 @@
 
 <!-- ===================== APPEL EN COURS ===================== -->
 <div id="call-active" class="call-active" hidden>
+  <!-- Le son de l'autre passe par cet element audio (pas par la video, qui peut etre cachee ou reduite) -->
+  <audio id="remote-audio" autoplay playsinline></audio>
   <div class="call-active-top">
     <span id="call-active-name"></span>
     <span id="call-active-status">connexion…</span>
   </div>
   <div class="call-video-wrap">
-    <video id="remote-video" autoplay playsinline></video>
+    <video id="remote-video" autoplay playsinline muted></video>
     <video id="local-video" autoplay playsinline muted></video>
   </div>
   <div id="call-audio-visual" class="call-audio-visual" hidden>

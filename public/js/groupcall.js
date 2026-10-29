@@ -49,6 +49,12 @@ function gcCreateTile(peerId, pseudo) {
   const video = document.createElement('video');
   video.autoplay = true;
   video.playsInline = true;
+  video.muted = true; // l'image seulement : le son passe par l'element audio ci-dessous
+  // Le son de cette personne passe par un element audio dedie, independant de
+  // l'image (qui peut etre cachee par l'avatar ou reduite).
+  const audio = document.createElement('audio');
+  audio.autoplay = true;
+  audio.playsInline = true;
   // Jamais de `hidden` sur cette video : elle porte le son distant, et la
   // mettre en display:none peut couper ce son sur certains mobiles. Sans
   // camera, c'est l'avatar (ajoute juste apres, par-dessus) qui la recouvre
@@ -64,10 +70,11 @@ function gcCreateTile(peerId, pseudo) {
   label.textContent = pseudo;
 
   tile.appendChild(video);
+  tile.appendChild(audio);
   tile.appendChild(avatar);
   tile.appendChild(label);
   gcGridEl.appendChild(tile);
-  return { tile, videoEl: video, avatarEl: avatar };
+  return { tile, videoEl: video, audioEl: audio, avatarEl: avatar };
 }
 
 function gcCreatePeerConnection(peerId) {
@@ -90,8 +97,10 @@ function gcCreatePeerConnection(peerId) {
   pc.ontrack = (e) => {
     const entry = gcPeers.get(peerId);
     if (!entry || !e.streams[0]) return;
-    entry.videoEl.srcObject = e.streams[0];
-    attemptAutoplay(entry.videoEl, gcOverlayEl); // defini dans call.js
+    entry.videoEl.srcObject = e.streams[0]; // l'image
+    entry.audioEl.srcObject = e.streams[0]; // le son
+    entry.videoEl.play().catch(() => {});
+    attemptAutoplay(entry.audioEl, gcOverlayEl); // defini dans call.js
     gcPlayAll();
     gcRefreshTile(entry);
   };
@@ -118,6 +127,7 @@ function gcRemovePeer(peerId) {
   const entry = gcPeers.get(peerId);
   if (!entry) return;
   entry.pc.close();
+  entry.audioEl.srcObject = null;
   entry.tile.remove();
   gcPeers.delete(peerId);
   gcStatusEl.textContent = gcPeers.size + 1 + ' participant' + (gcPeers.size > 0 ? 's' : '');
@@ -255,9 +265,9 @@ gcCamSelect.addEventListener('change', () => {
 // --------------------------- signalisation ---------------------------
 
 async function gcConnectToExisting(peerId, pseudo, cameraOn, screenOn) {
-  const { tile, videoEl, avatarEl } = gcCreateTile(peerId, pseudo);
+  const { tile, videoEl, audioEl, avatarEl } = gcCreateTile(peerId, pseudo);
   const pc = gcCreatePeerConnection(peerId);
-  const newEntry = { pc, pseudo, tile, videoEl, avatarEl, pendingCandidates: [], cameraOn: !!cameraOn, screenOn: !!screenOn };
+  const newEntry = { pc, pseudo, tile, videoEl, audioEl, avatarEl, pendingCandidates: [], cameraOn: !!cameraOn, screenOn: !!screenOn };
   gcPeers.set(peerId, newEntry);
   gcRefreshTile(newEntry);
   gcStatusEl.textContent = gcPeers.size + 1 + ' participants';
@@ -279,9 +289,9 @@ RBC.onSocketReady(function (socketInstance) {
   socketInstance.on('group:call:peer-joined', ({ groupId, fromId, fromPseudo, video }) => {
     if (groupId !== gcGroupId || gcPeers.has(fromId)) return;
     // quelqu'un rejoint : on prepare une connexion et on attend son offre
-    const { tile, videoEl, avatarEl } = gcCreateTile(fromId, fromPseudo);
+    const { tile, videoEl, audioEl, avatarEl } = gcCreateTile(fromId, fromPseudo);
     const pc = gcCreatePeerConnection(fromId);
-    const newEntry = { pc, pseudo: fromPseudo, tile, videoEl, avatarEl, pendingCandidates: [], cameraOn: !!video, screenOn: false };
+    const newEntry = { pc, pseudo: fromPseudo, tile, videoEl, audioEl, avatarEl, pendingCandidates: [], cameraOn: !!video, screenOn: false };
     gcPeers.set(fromId, newEntry);
     gcRefreshTile(newEntry);
     gcStatusEl.textContent = gcPeers.size + 1 + ' participants';
@@ -293,7 +303,7 @@ RBC.onSocketReady(function (socketInstance) {
     if (!entry) return;
     entry.screenOn = !!on;
     gcRefreshTile(entry);
-    if (on) attemptAutoplay(entry.videoEl, gcOverlayEl);
+    entry.videoEl.play().catch(() => {});
   });
 
   socketInstance.on('group:call:peer-left', ({ groupId, fromId }) => {
@@ -436,7 +446,8 @@ const gcSoundBtn = document.getElementById('btn-gc-enable-sound');
 async function gcPlayAll() {
   let blocked = false;
   for (const entry of gcPeers.values()) {
-    if (!(await tryPlay(entry.videoEl, null))) blocked = true;
+    entry.videoEl.play().catch(() => {});
+    if (!(await tryPlay(entry.audioEl, null))) blocked = true;
   }
   gcSoundBtn.hidden = !blocked;
 }

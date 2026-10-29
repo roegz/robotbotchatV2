@@ -44,6 +44,8 @@ const callActiveName = document.getElementById('call-active-name');
 const callActiveStatus = document.getElementById('call-active-status');
 const localVideoEl = document.getElementById('local-video');
 const remoteVideoEl = document.getElementById('remote-video');
+const remoteAudioEl = document.getElementById('remote-audio');
+remoteVideoEl.muted = true; // l'image seulement : le son passe par remoteAudioEl
 
 const btnHangup = document.getElementById('btn-hangup');
 const btnToggleMic = document.getElementById('btn-toggle-mic');
@@ -69,6 +71,14 @@ let currentCallPeerPseudo = '';
 let currentCallWithVideo = true;
 let incomingCallWithVideo = true;
 let pendingCandidates = [];
+// Role et phase de l'appel en cours : evitent les melanges quand deux personnes
+// s'appellent en meme temps. callRole : 'caller' (j'appelle) ou 'callee' (je recois).
+// callPhase : 'calling' (ca sonne chez l'autre) | 'ringing' (ca sonne chez moi) | 'connecting'.
+let callRole = null;
+let callPhase = null;
+let ringTimer = null; // l'appelant raccroche tout seul si personne ne repond
+let incomingTimer = null; // la banniere d'appel disparait toute seule si l'appelant est parti
+const RING_TIMEOUT_MS = 40000;
 let micEnabled = true;
 let camEnabled = true;
 let screenTrack = null; // piste du partage d'ecran en cours (null si pas de partage)
@@ -217,9 +227,11 @@ function createPeerConnection(peerId) {
 
   conn.ontrack = (event) => {
     if (!event.streams[0]) return;
-    remoteVideoEl.srcObject = event.streams[0];
-    attemptAutoplay(remoteVideoEl, callActiveEl);
-    tryPlay(remoteVideoEl, callSoundBtn);
+    remoteVideoEl.srcObject = event.streams[0]; // l'image
+    remoteAudioEl.srcObject = event.streams[0]; // le son
+    remoteVideoEl.play().catch(() => {});
+    attemptAutoplay(remoteAudioEl, callActiveEl);
+    tryPlay(remoteAudioEl, callSoundBtn);
     callActiveStatus.textContent = 'en cours';
   };
 
@@ -314,21 +326,56 @@ async function startCall(withVideo) {
     return;
   }
 
-  try {
-    localStream = await getLocalStream(withVideo);
-  } catch (e) {
-    return;
-  }
-
+  // On reserve l'appel TOUT DE SUITE, avant de demander le micro (ce qui peut
+  // prendre du temps) : sinon, si l'autre nous appelle au meme moment, les deux
+  // appareils se melangent et le son ne passe que dans un sens.
   currentCallPeerId = friendId;
   currentCallPeerPseudo = friend.pseudo;
   currentCallWithVideo = withVideo;
+  callRole = 'caller';
+  callPhase = 'calling';
+
+  let stream;
+  try {
+    stream = await getLocalStream(withVideo);
+  } catch (e) {
+    if (currentCallPeerId === friendId && callRole === 'caller') resetCallState();
+    return;
+  }
+  if (currentCallPeerId !== friendId || callRole !== 'caller') {
+    // l'appel a change pendant l'attente (ex : appels croises) : on lache ce micro
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  localStream = stream;
   openCallOverlay(friend.pseudo, 'Appel en cours\u2026', withVideo);
   socket().emit('call:invite', { to: friendId, video: withVideo });
+
+  // Personne ne repond : on raccroche tout seul et la sonnerie s'arrete chez l'autre.
+  clearTimeout(ringTimer);
+  ringTimer = setTimeout(() => {
+    if (callRole !== 'caller' || callPhase !== 'calling' || currentCallPeerId !== friendId) return;
+    RBC.showToast(friend.pseudo + " n'a pas répondu.");
+    socket().emit('call:cancel', { to: friendId });
+    endCall(true);
+  }, RING_TIMEOUT_MS);
+}
+
+// Remet a zero l'etat d'appel quand l'ecran d'appel n'a pas (encore) ete ouvert.
+function resetCallState() {
+  clearTimeout(ringTimer);
+  clearTimeout(incomingTimer);
+  currentCallPeerId = null;
+  currentCallPeerPseudo = '';
+  callRole = null;
+  callPhase = null;
+  callIncomingEl.hidden = true;
 }
 
 function handleCallAccepted({ fromId }) {
-  if (fromId !== currentCallPeerId) return;
+  if (fromId !== currentCallPeerId || callRole !== 'caller' || callPhase !== 'calling' || pc || !localStream) return;
+  clearTimeout(ringTimer);
+  callPhase = 'connecting';
   (async () => {
     pc = createPeerConnection(currentCallPeerId);
     try {
@@ -344,7 +391,7 @@ function handleCallAccepted({ fromId }) {
 }
 
 function handleCallRejected({ fromId }) {
-  if (fromId !== currentCallPeerId) return;
+  if (fromId !== currentCallPeerId || callRole !== 'caller') return;
   RBC.showToast(currentCallPeerPseudo + " a refuse l'appel.");
   endCall(true);
 }
@@ -352,55 +399,100 @@ function handleCallRejected({ fromId }) {
 // --------------------------- recevoir un appel (appele) ---------------------------
 
 function handleIncomingCall({ fromId, fromPseudo, video }) {
-  // deja en appel ou en train d'appeler -> on decroche pas, signal "occupe"
+  // Appels croises : on s'appelait en meme temps. Regle simple et identique des
+  // deux cotes : la personne dont l'identifiant est le plus petit garde son
+  // appel, l'autre abandonne le sien et repond tout de suite.
+  if (fromId === currentCallPeerId && callRole === 'caller' && callPhase === 'calling') {
+    if (RBC.state.me.id < fromId) return;
+    endCall(true);
+    acceptIncoming(fromId, fromPseudo, !!video);
+    return;
+  }
+  // deja en appel (ou en train d'appeler quelqu'un d'autre) -> "occupe"
   if (currentCallPeerId) {
     socket().emit('call:reject', { to: fromId });
     return;
   }
   currentCallPeerId = fromId;
   currentCallPeerPseudo = fromPseudo;
+  callRole = 'callee';
+  callPhase = 'ringing';
   incomingCallWithVideo = !!video;
   callIncomingName.textContent = fromPseudo + (video ? ' (appel video)' : ' (appel audio)');
   callIncomingEl.hidden = false;
+
+  // Securite : si l'appelant est parti sans qu'on l'ait su, la banniere s'enleve seule.
+  clearTimeout(incomingTimer);
+  incomingTimer = setTimeout(() => {
+    if (callRole !== 'callee' || callPhase !== 'ringing' || currentCallPeerId !== fromId) return;
+    resetCallState();
+    if (RBC.notify && RBC.notify.missedCall) RBC.notify.missedCall(fromPseudo);
+  }, RING_TIMEOUT_MS + 10000);
 }
 
 btnCallReject.addEventListener('click', () => {
-  if (currentCallPeerId) socket().emit('call:reject', { to: currentCallPeerId });
-  callIncomingEl.hidden = true;
-  currentCallPeerId = null;
-  currentCallPeerPseudo = '';
+  if (callRole === 'callee' && callPhase === 'ringing' && currentCallPeerId) {
+    socket().emit('call:reject', { to: currentCallPeerId });
+  }
+  resetCallState();
 });
 
-btnCallAccept.addEventListener('click', async () => {
-  const peerId = currentCallPeerId;
-  const peerPseudo = currentCallPeerPseudo;
-  const withVideo = incomingCallWithVideo;
+btnCallAccept.addEventListener('click', () => {
+  if (callRole !== 'callee' || callPhase !== 'ringing') return;
+  acceptIncoming(currentCallPeerId, currentCallPeerPseudo, incomingCallWithVideo);
+});
+
+async function acceptIncoming(peerId, peerPseudo, withVideo) {
+  clearTimeout(incomingTimer);
   callIncomingEl.hidden = true;
+  currentCallPeerId = peerId;
+  currentCallPeerPseudo = peerPseudo;
+  callRole = 'callee';
+  callPhase = 'connecting';
+
+  let stream;
   try {
-    localStream = await getLocalStream(withVideo);
+    stream = await getLocalStream(withVideo);
   } catch (e) {
     socket().emit('call:reject', { to: peerId });
-    currentCallPeerId = null;
+    if (currentCallPeerId === peerId) resetCallState();
     return;
   }
+  if (currentCallPeerId !== peerId || callRole !== 'callee') {
+    // l'appelant a raccroche pendant qu'on autorisait le micro
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  localStream = stream;
   currentCallWithVideo = withVideo;
   pc = createPeerConnection(peerId);
   openCallOverlay(peerPseudo, "en attente de l'appelant\u2026", withVideo);
   socket().emit('call:accept', { to: peerId });
-});
+}
 
+// L'appelant a raccroche avant qu'on reponde : la banniere et la sonnerie s'arretent.
 function handleCallCancelled({ fromId }) {
-  if (fromId !== currentCallPeerId) return;
-  RBC.showToast(currentCallPeerPseudo + " a annule l'appel.");
-  callIncomingEl.hidden = true;
-  currentCallPeerId = null;
-  currentCallPeerPseudo = '';
+  if (fromId !== currentCallPeerId || callRole !== 'callee') return;
+  const name = currentCallPeerPseudo;
+  const wasRinging = callPhase === 'ringing';
+  if (wasRinging) resetCallState();
+  else endCall(true); // il a raccroche pendant qu'on repondait
+  RBC.showToast(name + " a annulé l'appel.");
+  if (RBC.notify && RBC.notify.missedCall) RBC.notify.missedCall(name);
+}
+
+// Un autre appareil de la meme personne (appli + navigateur ouverts) a deja repondu ou refuse.
+function handleHandledElsewhere({ fromId }) {
+  if (callRole === 'callee' && callPhase === 'ringing' && fromId === currentCallPeerId) {
+    resetCallState();
+    RBC.showToast('Appel pris sur un autre appareil.');
+  }
 }
 
 // --------------------------- offre / reponse SDP ---------------------------
 
 async function handleOffer({ fromId, sdp }) {
-  if (fromId !== currentCallPeerId || !pc) return;
+  if (fromId !== currentCallPeerId || callRole !== 'callee' || !pc) return;
   try {
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     flushPendingCandidates();
@@ -414,7 +506,7 @@ async function handleOffer({ fromId, sdp }) {
 }
 
 async function handleAnswer({ fromId, sdp }) {
-  if (fromId !== currentCallPeerId || !pc) return;
+  if (fromId !== currentCallPeerId || callRole !== 'caller' || !pc) return;
   try {
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     flushPendingCandidates();
@@ -437,6 +529,11 @@ function handleIceCandidate({ fromId, candidate }) {
 
 function endCall(silent) {
   const peerId = currentCallPeerId;
+  clearTimeout(ringTimer);
+  clearTimeout(incomingTimer);
+  callRole = null;
+  callPhase = null;
+  audioHealth.reset();
   releaseWakeLock();
   if (screenTrack) {
     screenTrack.onended = null;
@@ -459,6 +556,7 @@ function endCall(silent) {
   callIncomingEl.hidden = true;
   localVideoEl.srcObject = null;
   remoteVideoEl.srcObject = null;
+  remoteAudioEl.srcObject = null;
   callVideoWrapEl.classList.remove('is-audio-call');
   callVideoWrapEl.classList.remove('is-screen');
   localVideoEl.hidden = false;
@@ -471,10 +569,22 @@ function endCall(silent) {
   }
 }
 
-btnHangup.addEventListener('click', () => endCall(false));
+btnHangup.addEventListener('click', () => {
+  // Pendant que ca sonne chez l'autre : on "annule" (sa banniere disparait).
+  if (callRole === 'caller' && callPhase === 'calling' && currentCallPeerId) {
+    socket().emit('call:cancel', { to: currentCallPeerId });
+    endCall(true);
+    return;
+  }
+  endCall(false);
+});
 
 function handleRemoteEnd({ fromId }) {
   if (fromId !== currentCallPeerId) return;
+  if (callRole === 'callee' && callPhase === 'ringing') {
+    handleCallCancelled({ fromId }); // l'appelant est parti avant qu'on reponde
+    return;
+  }
   RBC.showToast('Appel termine.');
   endCall(true);
 }
@@ -520,6 +630,7 @@ RBC.onSocketReady(function (socketInstance) {
   socketInstance.on('call:accepted', handleCallAccepted);
   socketInstance.on('call:rejected', handleCallRejected);
   socketInstance.on('call:cancelled', handleCallCancelled);
+  socketInstance.on('call:handled-elsewhere', handleHandledElsewhere);
   socketInstance.on('call:offer', handleOffer);
   socketInstance.on('call:answer', handleAnswer);
   socketInstance.on('call:ice-candidate', handleIceCandidate);
@@ -575,7 +686,7 @@ function handleRemoteScreen({ fromId, on }) {
   if (fromId !== currentCallPeerId) return;
   remoteScreenOn = !!on;
   applyCallLayout();
-  if (on) attemptAutoplay(remoteVideoEl, callActiveEl);
+  remoteVideoEl.play().catch(() => {});
 }
 
 async function startScreenShare() {
@@ -664,10 +775,10 @@ let lastMicRecoverAt = 0;
 
 // Si la piste micro est coupee (terminee), en reprend une nouvelle et la
 // redonne a toutes les connexions de l'appel. Renvoie true si le micro a ete relance.
-async function recoverMicIfNeeded(stream, peerConnections, enabled) {
+async function recoverMicIfNeeded(stream, peerConnections, enabled, force) {
   if (!stream || micRecovering) return false;
   const current = stream.getAudioTracks()[0];
-  if (current && current.readyState === 'live') return false;
+  if (!force && current && current.readyState === 'live') return false;
   if (Date.now() - lastMicRecoverAt < 4000) return false;
   lastMicRecoverAt = Date.now();
   micRecovering = true;
@@ -709,7 +820,8 @@ function keepRemotePlaying(mediaEl) {
 async function callKeeperTick() {
   if (!pc || !localStream || !currentCallPeerId) return;
   if (await recoverMicIfNeeded(localStream, [pc], micEnabled)) RBC.showToast('Micro relancé automatiquement.');
-  tryPlay(remoteVideoEl, callSoundBtn);
+  tryPlay(remoteAudioEl, callSoundBtn);
+  audioHealth.tick();
 }
 setInterval(callKeeperTick, 2500);
 
@@ -765,11 +877,70 @@ function unlockAudioEngine() {
 
 callSoundBtn.addEventListener('click', async () => {
   unlockAudioEngine();
-  const ok = await tryPlay(remoteVideoEl, callSoundBtn);
+  remoteVideoEl.play().catch(() => {});
+  const ok = await tryPlay(remoteAudioEl, callSoundBtn);
   if (!ok) RBC.showToast("Impossible d'activer le son : vérifie le volume et la sortie audio de l'appareil.", true);
 });
 // Taper n'importe ou sur l'ecran d'appel tente aussi de remettre le son.
 callActiveEl.addEventListener('click', () => {
   unlockAudioEngine();
-  tryPlay(remoteVideoEl, callSoundBtn);
+  tryPlay(remoteAudioEl, callSoundBtn);
 });
+
+// --------------------------- diagnostic du son pendant l'appel ---------------------------
+// Toutes les 2,5 s on regarde si des donnees audio passent vraiment dans les
+// DEUX sens et on l'ecrit sous le nom (ex : "connecté, mais on ne reçoit rien
+// de Paul"). Ca montre tout de suite de quel cote est le probleme, et si c'est
+// ton micro qui n'envoie plus rien, il est relance automatiquement.
+
+const audioHealth = {
+  lastIn: 0,
+  lastOut: 0,
+  stallIn: 0,
+  stallOut: 0,
+  forcedMic: false,
+  busy: false,
+  reset() {
+    this.lastIn = 0;
+    this.lastOut = 0;
+    this.stallIn = 0;
+    this.stallOut = 0;
+    this.forcedMic = false;
+  },
+  async tick() {
+    if (this.busy || !pc || pc.connectionState !== 'connected') return;
+    this.busy = true;
+    try {
+      let inBytes = 0;
+      let outBytes = 0;
+      const report = await pc.getStats();
+      report.forEach((r) => {
+        const kind = r.kind || r.mediaType;
+        if (kind !== 'audio') return;
+        if (r.type === 'inbound-rtp') inBytes += r.bytesReceived || 0;
+        if (r.type === 'outbound-rtp') outBytes += r.bytesSent || 0;
+      });
+      this.stallIn = inBytes > this.lastIn ? 0 : this.stallIn + 1;
+      this.stallOut = outBytes > this.lastOut ? 0 : this.stallOut + 1;
+      this.lastIn = inBytes;
+      this.lastOut = outBytes;
+
+      const name = currentCallPeerPseudo || "l'autre personne";
+      const noIn = this.stallIn >= 3;
+      const noOut = this.stallOut >= 3 && micEnabled;
+      if (noIn && noOut) callActiveStatus.textContent = 'connecté, mais aucun son ne passe';
+      else if (noOut) callActiveStatus.textContent = "connecté, mais ton micro n'envoie rien";
+      else if (noIn) callActiveStatus.textContent = 'connecté, mais on ne reçoit rien de ' + name;
+      else callActiveStatus.textContent = 'en cours';
+
+      if (noOut && !this.forcedMic && localStream) {
+        this.forcedMic = true; // une seule tentative par appel
+        if (await recoverMicIfNeeded(localStream, [pc], micEnabled, true)) RBC.showToast('Micro relancé automatiquement.');
+      }
+    } catch (e) {
+      // pas grave, on reessaiera
+    } finally {
+      this.busy = false;
+    }
+  },
+};

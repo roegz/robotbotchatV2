@@ -201,6 +201,12 @@
     if (inBackground) showSystem(title, body, tag, data);
   }
 
+  // Appel manque : l'appelant a raccroche avant qu'on reponde.
+  function missedCall(pseudo) {
+    if (!isEnabled() || !pageIsInBackground()) return;
+    showSystem('Appel manqué', pseudo + " a essayé de t'appeler", 'missed-call', { type: 'call' });
+  }
+
   // ---------------------------- sonnerie d'appel ----------------------------
 
   function startRing() {
@@ -270,5 +276,5 @@
 
   if (bellBtn) bellBtn.addEventListener('click', toggle);
 
-  RBC.notify = { init, onLogout, newMessage, isEnabled, toggle, startRing, stopRing };
+  RBC.notify = { init, onLogout, newMessage, missedCall, isEnabled, toggle, startRing, stopRing };
 })();
