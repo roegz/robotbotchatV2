@@ -74,6 +74,8 @@ let pendingCandidates = [];
 // Role et phase de l'appel en cours : evitent les melanges quand deux personnes
 // s'appellent en meme temps. callRole : 'caller' (j'appelle) ou 'callee' (je recois).
 // callPhase : 'calling' (ca sonne chez l'autre) | 'ringing' (ca sonne chez moi) | 'connecting'.
+let stopSpeakRemote = null; // arrete l'ecoute du volume de l'autre (bord lumineux)
+let stopSpeakLocal = null; // idem pour ton propre micro
 let callRole = null;
 let callPhase = null;
 let ringTimer = null; // l'appelant raccroche tout seul si personne ne repond
@@ -229,6 +231,10 @@ function createPeerConnection(peerId) {
     if (!event.streams[0]) return;
     remoteVideoEl.srcObject = event.streams[0]; // l'image
     remoteAudioEl.srcObject = event.streams[0]; // le son
+    if (RBC.fx && RBC.fx.watchSpeaking) {
+      if (stopSpeakRemote) stopSpeakRemote();
+      stopSpeakRemote = RBC.fx.watchSpeaking(event.streams[0], callActiveEl, 'remote-speaking');
+    }
     remoteVideoEl.play().catch(() => {});
     attemptAutoplay(remoteAudioEl, callActiveEl);
     tryPlay(remoteAudioEl, callSoundBtn);
@@ -281,6 +287,10 @@ function openCallOverlay(peerPseudo, statusText, withVideo) {
   remoteScreenOn = false;
   callVideoWrapEl.classList.remove('is-screen');
   acquireWakeLock();
+  if (RBC.fx && RBC.fx.watchSpeaking && localStream) {
+    if (stopSpeakLocal) stopSpeakLocal();
+    stopSpeakLocal = RBC.fx.watchSpeaking(localStream, callActiveEl, 'local-speaking');
+  }
 
   callCamSelectWrap.hidden = !withVideo;
   populateDeviceSelects(callMicSelect, withVideo ? callCamSelect : null, localStream);
@@ -534,6 +544,10 @@ function endCall(silent) {
   callRole = null;
   callPhase = null;
   audioHealth.reset();
+  if (stopSpeakRemote) stopSpeakRemote();
+  if (stopSpeakLocal) stopSpeakLocal();
+  stopSpeakRemote = null;
+  stopSpeakLocal = null;
   releaseWakeLock();
   if (screenTrack) {
     screenTrack.onended = null;

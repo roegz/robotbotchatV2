@@ -139,6 +139,22 @@ async function adminApi(path, options = {}) {
   return data;
 }
 
+// Le chiffre monte de 0 jusqu'a sa valeur en une seconde environ.
+function countUp(el, target) {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    el.textContent = String(target);
+    return;
+  }
+  const start = performance.now();
+  const duration = 900;
+  (function step(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = String(Math.round(target * eased));
+    if (t < 1) requestAnimationFrame(step);
+  })(start);
+}
+
 function renderStats(stats) {
   statsGrid.innerHTML = '';
   Object.keys(STAT_LABELS).forEach((key) => {
@@ -147,7 +163,7 @@ function renderStats(stats) {
     box.className = 'stat-box';
     const value = document.createElement('div');
     value.className = 'stat-value';
-    value.textContent = String(stats[key]);
+    countUp(value, Number(stats[key]) || 0);
     const label = document.createElement('div');
     label.className = 'stat-label';
     label.textContent = STAT_LABELS[key];

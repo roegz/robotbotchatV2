@@ -246,6 +246,7 @@ function connectSocket() {
     } else if (msg.from !== RBC.state.me.id) {
       const friend = getFriendById(msg.from);
       showToast((friend ? friend.pseudo : 'Quelqu\u2019un') + ' t\u2019a envoye un message.');
+      if (RBC.fx) RBC.fx.flashItem(msg.from);
     }
     if (msg.from !== RBC.state.me.id && RBC.notify) {
       const friend = getFriendById(msg.from);
@@ -299,6 +300,7 @@ function connectSocket() {
       showToast(
         (sender ? sender.pseudo : 'Quelqu\u2019un') + ' a ecrit dans ' + (group ? group.name : 'un groupe') + '.'
       );
+      if (RBC.fx) RBC.fx.flashItem(msg.groupId);
     }
     if (msg.from !== RBC.state.me.id && RBC.notify) {
       const group = getGroupById(msg.groupId);

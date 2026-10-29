@@ -26,6 +26,7 @@ const gcMicSelect = document.getElementById('gc-mic-select');
 const gcCamSelect = document.getElementById('gc-cam-select');
 const gcCamSelectWrap = document.getElementById('gc-cam-select-wrap');
 const btnGcToggleScreen = document.getElementById('btn-gc-toggle-screen');
+let gcStopSpeakLocal = null; // bord lumineux quand tu parles
 let gcScreenTrack = null; // piste du partage d'ecran en cours (null si pas de partage)
 
 let gcGroupId = null;
@@ -99,6 +100,10 @@ function gcCreatePeerConnection(peerId) {
     if (!entry || !e.streams[0]) return;
     entry.videoEl.srcObject = e.streams[0]; // l'image
     entry.audioEl.srcObject = e.streams[0]; // le son
+    if (RBC.fx && RBC.fx.watchSpeaking) {
+      if (entry.stopSpeaking) entry.stopSpeaking();
+      entry.stopSpeaking = RBC.fx.watchSpeaking(e.streams[0], entry.tile, 'is-speaking');
+    }
     entry.videoEl.play().catch(() => {});
     attemptAutoplay(entry.audioEl, gcOverlayEl); // defini dans call.js
     gcPlayAll();
@@ -126,6 +131,7 @@ function gcFlushCandidates(entry) {
 function gcRemovePeer(peerId) {
   const entry = gcPeers.get(peerId);
   if (!entry) return;
+  if (entry.stopSpeaking) entry.stopSpeaking();
   entry.pc.close();
   entry.audioEl.srcObject = null;
   entry.tile.remove();
@@ -178,6 +184,10 @@ async function joinGroupCall(groupId, withVideo) {
   videoEl.hidden = !withVideo;
   avatarEl.hidden = withVideo;
   gcLocalTile = { tile, videoEl, avatarEl };
+  if (RBC.fx && RBC.fx.watchSpeaking) {
+    if (gcStopSpeakLocal) gcStopSpeakLocal();
+    gcStopSpeakLocal = RBC.fx.watchSpeaking(gcLocalStream, tile, 'is-speaking');
+  }
 
   gcCamSelectWrap.hidden = !withVideo;
   populateDeviceSelects(gcMicSelect, withVideo ? gcCamSelect : null, gcLocalStream); // defini dans call.js
@@ -188,6 +198,8 @@ async function joinGroupCall(groupId, withVideo) {
 function leaveGroupCall() {
   if (!gcGroupId) return;
   releaseWakeLock();
+  if (gcStopSpeakLocal) gcStopSpeakLocal();
+  gcStopSpeakLocal = null;
   if (gcScreenTrack) {
     gcScreenTrack.onended = null;
     gcScreenTrack.stop();
